@@ -1324,8 +1324,6 @@
                 let msgType = 'other';
                 if (username === 'Claude') {
                     msgType = 'claude';
-                    // Claude 응답 시 알림 소리
-                    playNotificationSound();
                 } else if (username === currentUserId) {
                     msgType = 'user';
                 }
@@ -1537,9 +1535,6 @@
                 indicator.textContent = '✓';
             }
 
-            // 완료 알림 소리
-            playNotificationSound();
-
             currentProgress = null;
         }
 
@@ -1575,7 +1570,15 @@
             }
         });
 
+        let previousQueueCount = 0;  // 이전 큐 카운트 추적
+
         function updateQueueStatus(count, items) {
+            // 큐가 비었을 때 알림 (이전에 1개 이상이었다가 0개가 된 경우)
+            if (previousQueueCount > 0 && count === 0) {
+                playNotificationSound();
+            }
+            previousQueueCount = count;
+
             queueCount.textContent = count;
             if (count === 0) {
                 queueCount.classList.add('empty');
