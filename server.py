@@ -46,7 +46,11 @@ DEFAULT_CONFIG = {
     "max_login_attempts": 5,
     "lockout_duration": 300,  # 초 (5분)
     "max_auto_unblock": 3,  # 최대 자동 해제 횟수 (초과 시 영구 차단)
-    "session_timeout": 3600  # 세션 만료 시간 (초, 기본 1시간)
+    "session_timeout": 3600,  # 세션 만료 시간 (초, 기본 1시간)
+    # Claude CLI 설정
+    "claude_timeout": 300,  # Claude 응답 타임아웃 (초)
+    "claude_working_dir": "",  # 작업 디렉토리 (빈 문자열 = 현재 디렉토리)
+    "claude_skip_permissions": True  # --dangerously-skip-permissions 플래그 사용
 }
 
 
@@ -1024,6 +1028,54 @@ class ConfigGUI:
         self.session_timeout_var = tk.StringVar(value=str(config.get("session_timeout", 3600)))
         ttk.Entry(session_frame, textvariable=self.session_timeout_var, width=10).pack(side=tk.RIGHT)
 
+        # Claude CLI 설정 프레임
+        claude_frame = ttk.LabelFrame(main_frame, text="Claude CLI 설정", padding=10)
+        claude_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # Claude 타임아웃
+        claude_timeout_frame = ttk.Frame(claude_frame)
+        claude_timeout_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(claude_timeout_frame, text="응답 타임아웃 (초):").pack(side=tk.LEFT)
+        self.claude_timeout_var = tk.StringVar(value=str(config.get("claude_timeout", 300)))
+        ttk.Entry(claude_timeout_frame, textvariable=self.claude_timeout_var, width=10).pack(side=tk.RIGHT)
+
+        # 작업 디렉토리
+        workdir_frame = ttk.Frame(claude_frame)
+        workdir_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(workdir_frame, text="작업 디렉토리:").pack(side=tk.LEFT)
+        self.claude_workdir_var = tk.StringVar(value=config.get("claude_working_dir", ""))
+        workdir_entry = ttk.Entry(workdir_frame, textvariable=self.claude_workdir_var, width=20)
+        workdir_entry.pack(side=tk.LEFT, padx=(5, 5), fill=tk.X, expand=True)
+        browse_btn = tk.Button(workdir_frame, text="찾기", command=self.browse_working_dir,
+                              bg="#6366f1", fg="white", width=5)
+        browse_btn.pack(side=tk.RIGHT)
+
+        # 권한 스킵 옵션
+        self.claude_skip_permissions_var = tk.BooleanVar(value=config.get("claude_skip_permissions", True))
+        skip_perm_check = ttk.Checkbutton(claude_frame, text="권한 확인 스킵 (--dangerously-skip-permissions)",
+                                          variable=self.claude_skip_permissions_var)
+        skip_perm_check.pack(anchor=tk.W, pady=(5, 5))
+
+        # CLI 상태 확인 버튼
+        cli_btn_frame = ttk.Frame(claude_frame)
+        cli_btn_frame.pack(fill=tk.X, pady=(5, 0))
+
+        check_cli_btn = tk.Button(cli_btn_frame, text="상태 확인", command=self.check_claude_cli,
+                                 bg="#fbbf24", fg="black")
+        check_cli_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        install_cli_btn = tk.Button(cli_btn_frame, text="CLI 설치", command=self.install_claude_cli,
+                                   bg="#4ade80", fg="white")
+        install_cli_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        auth_cli_btn = tk.Button(cli_btn_frame, text="CLI 인증", command=self.auth_claude_cli,
+                                bg="#6366f1", fg="white")
+        auth_cli_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.cli_status_label = tk.Label(cli_btn_frame, text="", bg=self.bg_color, fg=self.fg_color,
+                                         font=("Segoe UI", 9))
+        self.cli_status_label.pack(side=tk.LEFT, fill=tk.X)
+
         # IP 내역 프레임
         ip_frame = ttk.LabelFrame(main_frame, text="IP 내역", padding=10)
         ip_frame.pack(fill=tk.X, pady=(0, 10))
@@ -1090,6 +1142,9 @@ class ConfigGUI:
         self.stop_btn = ttk.Button(btn_frame, text="서버 중지", command=self.stop_server, state=tk.DISABLED)
         self.stop_btn.pack(side=tk.LEFT, padx=(0, 5))
 
+        self.client_btn = ttk.Button(btn_frame, text="클라이언트 실행", command=self.open_client, state=tk.DISABLED)
+        self.client_btn.pack(side=tk.LEFT, padx=(0, 5))
+
         save_btn = ttk.Button(btn_frame, text="설정 저장", command=self.save_config)
         save_btn.pack(side=tk.RIGHT)
 
@@ -1103,6 +1158,12 @@ class ConfigGUI:
         self.lockout_var.set(str(config.get("lockout_duration", 300)))
         self.max_unblock_var.set(str(config.get("max_auto_unblock", 3)))
         self.session_timeout_var.set(str(config.get("session_timeout", 3600)))
+
+        # Claude CLI 설정 로드
+        self.claude_timeout_var.set(str(config.get("claude_timeout", 300)))
+        self.claude_workdir_var.set(config.get("claude_working_dir", ""))
+        self.claude_skip_permissions_var.set(config.get("claude_skip_permissions", True))
+
         self.refresh_account_list()
         self.refresh_ip_list()
 
@@ -1243,6 +1304,271 @@ class ConfigGUI:
             self.log_viewer_dialog.destroy()
             self.log_viewer_dialog = None
 
+    def browse_working_dir(self):
+        """작업 디렉토리 선택"""
+        from tkinter import filedialog
+        directory = filedialog.askdirectory(
+            title="Claude 작업 디렉토리 선택",
+            initialdir=self.claude_workdir_var.get() or WORKING_DIR
+        )
+        if directory:
+            self.claude_workdir_var.set(directory)
+
+    def check_claude_cli(self, show_warning=True):
+        """Claude CLI 상태 확인"""
+        import subprocess
+
+        self.cli_status_label.config(text="확인 중...", fg="#fbbf24")
+        self.root.update()
+
+        try:
+            # Claude CLI 버전 확인 (Windows에서는 shell=True 필요)
+            result = subprocess.run(
+                "claude --version",
+                capture_output=True,
+                text=True,
+                timeout=10,
+                shell=True
+            )
+
+            if result.returncode == 0:
+                version = result.stdout.strip()
+                self.cli_status_label.config(text=f"✓ {version}", fg="#4ade80")
+
+                # 인증 상태 확인 (간단한 테스트)
+                self._check_claude_auth()
+            else:
+                self.cli_status_label.config(text="✗ CLI 미설치", fg="#ef4444")
+                if show_warning:
+                    messagebox.showwarning(
+                        "Claude CLI 미설치",
+                        "Claude CLI가 설치되지 않았습니다.\n\n"
+                        "'CLI 설치' 버튼을 눌러 설치를 진행하세요."
+                    )
+
+        except subprocess.TimeoutExpired:
+            self.cli_status_label.config(text="✗ 타임아웃", fg="#ef4444")
+        except Exception as e:
+            self.cli_status_label.config(text=f"✗ 오류: {str(e)[:20]}", fg="#ef4444")
+
+    def _check_claude_auth(self):
+        """Claude CLI 인증 상태 확인"""
+        import subprocess
+
+        try:
+            # 간단한 명령으로 인증 테스트
+            result = subprocess.run(
+                "claude --help",
+                capture_output=True,
+                text=True,
+                timeout=5,
+                shell=True
+            )
+
+            if result.returncode == 0:
+                current_text = self.cli_status_label.cget("text")
+                self.cli_status_label.config(text=f"{current_text} (준비됨)", fg="#4ade80")
+        except:
+            pass
+
+    def install_claude_cli(self):
+        """Claude CLI 설치 (Node.js 확인 후 진행)"""
+        import subprocess
+
+        # 1단계: Node.js 확인
+        self.cli_status_label.config(text="Node.js 확인 중...", fg="#fbbf24")
+        self.root.update()
+
+        node_installed = self._check_nodejs()
+
+        if not node_installed:
+            # Node.js 미설치 - 설치 안내
+            result = messagebox.askyesno(
+                "Node.js 필요",
+                "Claude CLI 설치를 위해 Node.js가 필요합니다.\n\n"
+                "Node.js가 설치되어 있지 않습니다.\n"
+                "Node.js 다운로드 페이지를 열까요?\n\n"
+                "(설치 후 이 프로그램을 재시작하세요)"
+            )
+            if result:
+                import webbrowser
+                webbrowser.open("https://nodejs.org/")
+            self.cli_status_label.config(text="✗ Node.js 필요", fg="#ef4444")
+            return
+
+        # 2단계: Claude CLI 이미 설치되어 있는지 확인
+        if self._check_claude_installed():
+            messagebox.showinfo("알림", "Claude CLI가 이미 설치되어 있습니다.")
+            self.check_claude_cli()
+            return
+
+        # 3단계: Claude CLI 설치
+        result = messagebox.askyesno(
+            "Claude CLI 설치",
+            "Claude CLI를 설치하시겠습니까?\n\n"
+            "명령어: npm install -g @anthropic-ai/claude-code\n\n"
+            "설치에 시간이 걸릴 수 있습니다."
+        )
+
+        if not result:
+            return
+
+        self._run_cli_installation()
+
+    def _check_nodejs(self):
+        """Node.js 설치 여부 확인"""
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                "node --version",
+                capture_output=True,
+                text=True,
+                timeout=10,
+                shell=True
+            )
+            return result.returncode == 0
+        except:
+            return False
+
+    def _check_claude_installed(self):
+        """Claude CLI 설치 여부 확인"""
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                "claude --version",
+                capture_output=True,
+                text=True,
+                timeout=10,
+                shell=True
+            )
+            return result.returncode == 0
+        except:
+            return False
+
+    def _run_cli_installation(self):
+        """Claude CLI 설치 실행"""
+        import subprocess
+        import threading
+
+        self.cli_status_label.config(text="설치 중... (잠시 대기)", fg="#fbbf24")
+        self.root.update()
+
+        def install_thread():
+            try:
+                # npm install 실행 (Windows에서는 shell=True 필요)
+                result = subprocess.run(
+                    "npm install -g @anthropic-ai/claude-code",
+                    capture_output=True,
+                    text=True,
+                    timeout=300,  # 5분 타임아웃
+                    shell=True
+                )
+
+                # UI 업데이트는 메인 스레드에서
+                self.root.after(0, lambda: self._on_install_complete(result))
+
+            except subprocess.TimeoutExpired:
+                self.root.after(0, lambda: self._on_install_error("설치 타임아웃"))
+            except Exception as e:
+                error_msg = str(e)
+                self.root.after(0, lambda msg=error_msg: self._on_install_error(msg))
+
+        # 별도 스레드에서 설치 실행
+        thread = threading.Thread(target=install_thread, daemon=True)
+        thread.start()
+
+    def _on_install_complete(self, result):
+        """설치 완료 처리"""
+        if result.returncode == 0:
+            self.cli_status_label.config(text="✓ 설치 완료!", fg="#4ade80")
+            messagebox.showinfo(
+                "설치 완료",
+                "Claude CLI가 성공적으로 설치되었습니다.\n\n"
+                "처음 사용 시 인증이 필요할 수 있습니다.\n"
+                "터미널에서 'claude' 명령어를 실행하여 인증하세요."
+            )
+            # 상태 다시 확인 (경고 팝업 없이)
+            self.check_claude_cli(show_warning=False)
+        else:
+            error_msg = result.stderr[:200] if result.stderr else "알 수 없는 오류"
+            self.cli_status_label.config(text="✗ 설치 실패", fg="#ef4444")
+            messagebox.showerror(
+                "설치 실패",
+                f"Claude CLI 설치 중 오류가 발생했습니다.\n\n{error_msg}"
+            )
+
+    def _on_install_error(self, error_msg):
+        """설치 오류 처리"""
+        self.cli_status_label.config(text="✗ 설치 오류", fg="#ef4444")
+        messagebox.showerror("설치 오류", f"설치 중 오류 발생:\n{error_msg}")
+
+    def auth_claude_cli(self):
+        """Claude CLI 인증 (터미널 열기)"""
+        import subprocess
+
+        # CLI 설치 여부 확인
+        if not self._check_claude_installed():
+            messagebox.showwarning(
+                "CLI 미설치",
+                "Claude CLI가 설치되어 있지 않습니다.\n\n"
+                "'CLI 설치' 버튼을 눌러 먼저 설치하세요."
+            )
+            return
+
+        # 터미널에서 claude 실행
+        try:
+            if sys.platform == "win32":
+                # Windows: 새 cmd 창에서 claude 실행
+                subprocess.Popen(
+                    'start cmd /k "claude"',
+                    shell=True
+                )
+            elif sys.platform == "darwin":
+                # macOS: Terminal.app에서 실행
+                subprocess.Popen(
+                    ['osascript', '-e', 'tell app "Terminal" to do script "claude"']
+                )
+            else:
+                # Linux: 기본 터미널에서 실행
+                subprocess.Popen(
+                    ['x-terminal-emulator', '-e', 'claude']
+                )
+
+            messagebox.showinfo(
+                "CLI 인증",
+                "터미널 창이 열렸습니다.\n\n"
+                "• 인증이 필요한 경우: 안내에 따라 인증을 진행하세요.\n"
+                "• 인증이 이미 완료된 경우: Claude 프롬프트가 표시됩니다.\n"
+                "  창을 그대로 닫으면 됩니다.\n\n"
+                "인증 완료 후 '상태 확인' 버튼을 눌러 확인하세요."
+            )
+        except Exception as e:
+            messagebox.showerror(
+                "오류",
+                f"터미널을 열 수 없습니다.\n\n"
+                f"수동으로 터미널을 열고 'claude' 명령어를 실행하세요.\n\n"
+                f"오류: {str(e)}"
+            )
+
+    def open_client(self):
+        """웹 브라우저에서 클라이언트 열기"""
+        import webbrowser
+
+        port = self.port_var.get()
+        url = f"http://localhost:{port}/"
+
+        try:
+            webbrowser.open(url)
+        except Exception as e:
+            messagebox.showerror(
+                "오류",
+                f"브라우저를 열 수 없습니다.\n\n"
+                f"수동으로 브라우저에서 {url} 에 접속하세요.\n\n"
+                f"오류: {str(e)}"
+            )
+
     def add_account(self):
         """계정 추가"""
         dialog = AddAccountDialog(self.root)
@@ -1288,6 +1614,7 @@ class ConfigGUI:
             lockout_duration = int(self.lockout_var.get())
             max_auto_unblock = int(self.max_unblock_var.get())
             session_timeout = int(self.session_timeout_var.get())
+            claude_timeout = int(self.claude_timeout_var.get())
 
             if port < 1 or port > 65535:
                 raise ValueError("포트는 1-65535 범위여야 합니다.")
@@ -1299,6 +1626,8 @@ class ConfigGUI:
                 raise ValueError("최대 자동 해제 횟수는 1 이상이어야 합니다.")
             if session_timeout < 60:
                 raise ValueError("세션 만료 시간은 60초 이상이어야 합니다.")
+            if claude_timeout < 30:
+                raise ValueError("Claude 타임아웃은 30초 이상이어야 합니다.")
 
             config["port"] = port
             config["timeout"] = timeout
@@ -1308,6 +1637,11 @@ class ConfigGUI:
             config["lockout_duration"] = lockout_duration
             config["max_auto_unblock"] = max_auto_unblock
             config["session_timeout"] = session_timeout
+
+            # Claude CLI 설정
+            config["claude_timeout"] = claude_timeout
+            config["claude_working_dir"] = self.claude_workdir_var.get()
+            config["claude_skip_permissions"] = self.claude_skip_permissions_var.get()
 
             save_config(config)
             messagebox.showinfo("저장", "설정이 저장되었습니다.")
@@ -1324,6 +1658,7 @@ class ConfigGUI:
             self.status_label.config(text=f"서버 실행 중: http://localhost:{port}/", fg="#4ade80")
             self.start_btn.config(state=tk.DISABLED)
             self.stop_btn.config(state=tk.NORMAL)
+            self.client_btn.config(state=tk.NORMAL)
             self.port_entry.config(state=tk.DISABLED)
         except Exception as e:
             messagebox.showerror("오류", f"서버 시작 실패: {e}")
@@ -1337,6 +1672,7 @@ class ConfigGUI:
         self.status_label.config(text="서버 중지됨", fg="#ef4444")
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
+        self.client_btn.config(state=tk.DISABLED)
         self.port_entry.config(state=tk.NORMAL)
 
     def run(self):
