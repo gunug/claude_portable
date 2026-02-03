@@ -2,26 +2,48 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Claude Portable</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         * {
-            box-sizing: border-box;
-        }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            background-color: #0a0a0a;
-            color: #eee;
             margin: 0;
             padding: 0;
-            min-height: 100vh;
+            box-sizing: border-box;
+        }
+
+        html {
+            height: 100%;
+            height: -webkit-fill-available;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #0a0a0a;
+            color: #eee;
+            height: 100%;
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+        }
+
+        /* ============================================================
+           로그인 화면
+           ============================================================ */
+        .login-container {
             display: flex;
             justify-content: center;
             align-items: center;
+            height: 100%;
+            width: 100%;
         }
-
-        /* 로그인 화면 */
-        .login-container {
+        .login-box {
             background-color: #1a1a2e;
             padding: 40px;
             border-radius: 12px;
@@ -29,7 +51,7 @@
             width: 100%;
             max-width: 360px;
         }
-        .login-container h1 {
+        .login-box h1 {
             color: #6366f1;
             text-align: center;
             margin-bottom: 30px;
@@ -83,116 +105,812 @@
             min-height: 20px;
         }
 
-        /* 채팅 화면 */
-        .chat-container {
+        /* ============================================================
+           앱 컨테이너 (채팅 화면)
+           ============================================================ */
+        .app-container {
             display: none;
             flex-direction: column;
+            height: 100%;
             width: 100%;
-            height: 100vh;
-            padding: 20px;
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
         }
-        .chat-header {
+
+        /* 헤더 */
+        .header {
+            background-color: #111;
+            padding: 12px 20px;
+            padding-top: calc(12px + env(safe-area-inset-top, 0px));
             display: flex;
+            align-items: center;
             justify-content: space-between;
-            align-items: center;
-            padding-bottom: 15px;
-            border-bottom: 1px solid #333;
+            border-bottom: 1px solid #222;
+            flex-shrink: 0;
         }
-        .chat-header h1 {
+
+        .header h1 {
+            font-size: 18px;
+            color: #fff;
+        }
+
+        .header h1 span {
             color: #6366f1;
-            margin: 0;
-            font-size: 20px;
         }
-        .user-info {
+
+        .header-right {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
         }
-        .user-info span {
-            color: #aaa;
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
         }
-        .logout-btn {
-            padding: 8px 16px;
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: #888;
+        }
+
+        .status-dot.connected {
+            background-color: #4ade80;
+        }
+
+        .status-dot.disconnected {
             background-color: #ef4444;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
         }
-        .logout-btn:hover {
-            background-color: #dc2626;
-        }
-        .status {
-            padding: 8px 12px;
+
+        .header-btn {
+            padding: 6px 12px;
+            background-color: #1a1a2e;
+            color: #888;
+            border: 1px solid #333;
             border-radius: 6px;
-            margin: 15px 0;
-            display: inline-block;
-            font-size: 14px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
         }
-        .status.connected {
-            background-color: #1a3a1a;
-            border: 1px solid #4ade80;
-            color: #4ade80;
+
+        .header-btn:hover {
+            background-color: #222;
+            border-color: #6366f1;
+            color: #eee;
         }
-        .status.disconnected {
-            background-color: #3a1a1a;
-            border: 1px solid #ef4444;
+
+        .logout-btn {
+            background-color: #1a1a2e;
+            border-color: #ef4444;
             color: #ef4444;
         }
-        .status.connecting {
-            background-color: #3a3a1a;
-            border: 1px solid #fbbf24;
+
+        .logout-btn:hover {
+            background-color: #2a1a1a;
+            border-color: #ef4444;
+        }
+
+        /* 사용량 UI */
+        .usage-container {
+            display: flex;
+            flex-wrap: nowrap;
+            align-items: center;
+            gap: 8px;
+            font-size: 11px;
+            color: #888;
+            flex-shrink: 0;
+        }
+
+        .usage-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            white-space: nowrap;
+        }
+
+        .usage-label {
+            color: #666;
+        }
+
+        .usage-value {
+            color: #4ade80;
+            font-weight: 500;
+        }
+
+        .usage-value.warning {
+            color: #f59e0b;
+        }
+
+        .usage-value.danger {
+            color: #ef4444;
+        }
+
+        .usage-divider {
+            color: #333;
+        }
+
+        /* 요청 대기열 UI */
+        .queue-container {
+            background-color: #111;
+            border-bottom: 1px solid #222;
+            padding: 8px 20px;
+            flex-shrink: 0;
+        }
+
+        .queue-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            padding: 4px 0;
+        }
+
+        .queue-header:hover {
+            background-color: rgba(255,255,255,0.05);
+            margin: 0 -8px;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        .queue-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: #888;
+        }
+
+        .queue-count {
+            background-color: #6366f1;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: bold;
+            min-width: 20px;
+            text-align: center;
+        }
+
+        .queue-count.empty {
+            background-color: #4ade80;
+        }
+
+        .queue-toggle {
+            font-size: 11px;
+            color: #888;
+        }
+
+        .queue-body {
+            margin-top: 8px;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+
+        .queue-body.collapsed {
+            display: none;
+        }
+
+        .queue-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 6px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .queue-item:last-child {
+            border-bottom: none;
+        }
+
+        .queue-item-number {
+            width: 20px;
+            height: 20px;
+            background-color: #1a1a2e;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            color: #888;
+            flex-shrink: 0;
+        }
+
+        .queue-item-content {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .queue-item-sender {
+            font-size: 11px;
+            color: #6366f1;
+            margin-bottom: 2px;
+        }
+
+        .queue-item-message {
+            font-size: 12px;
+            color: #aaa;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .queue-empty {
+            font-size: 12px;
+            color: #666;
+            text-align: center;
+            padding: 8px 0;
+        }
+
+        /* 채팅 영역 */
+        .chat-area {
+            flex: 1;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            padding: 20px;
+            min-height: 0;
+        }
+
+        .message {
+            margin-bottom: 16px;
+            max-width: 85%;
+        }
+
+        .message.system {
+            text-align: center;
+            max-width: 100%;
+        }
+
+        .message.system .content {
+            display: inline-block;
+            background-color: #1a1a2e;
+            color: #888;
+            padding: 6px 12px;
+            border-radius: 12px;
+            font-size: 13px;
+        }
+
+        .message.user {
+            margin-left: auto;
+        }
+
+        .message .username {
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 4px;
+        }
+
+        .message.user .username {
+            text-align: right;
+        }
+
+        .message .content {
+            padding: 10px 14px;
+            border-radius: 12px;
+            line-height: 1.6;
+            word-wrap: break-word;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
+
+        .message.claude .content {
+            background-color: #1a1a2e;
+            border-bottom-left-radius: 4px;
+        }
+
+        .message.user .content {
+            background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.other .content {
+            background-color: #16162a;
+            border-bottom-left-radius: 4px;
+        }
+
+        /* 마크다운 스타일 */
+        .message .content code {
+            background-color: rgba(0,0,0,0.3);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px;
+            word-break: break-all;
+        }
+
+        .message .content pre {
+            background-color: rgba(0,0,0,0.3);
+            padding: 12px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 8px 0;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .message .content pre code {
+            background: none;
+            padding: 0;
+            word-break: break-all;
+        }
+
+        .message .content ul, .message .content ol {
+            margin-left: 20px;
+            margin-top: 8px;
+            margin-bottom: 8px;
+        }
+
+        .message .content p {
+            margin-bottom: 8px;
+        }
+
+        .message .content p:last-child {
+            margin-bottom: 0;
+        }
+
+        /* 진행 상황 컨테이너 */
+        .progress-container {
+            margin-bottom: 16px;
+            max-width: 100%;
+            background-color: #111;
+            border: 1px solid #222;
+            border-radius: 12px;
+            padding: 16px;
+        }
+
+        .progress-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .progress-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, #6366f1, #a855f7);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+            color: white;
+        }
+
+        .progress-icon.spinning {
+            animation: spin 2s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .progress-title {
+            font-size: 14px;
+            font-weight: 500;
+            color: #6366f1;
+        }
+
+        .progress-model {
+            font-size: 12px;
+            color: #888;
+            margin-left: auto;
+            background-color: #1a1a2e;
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+
+        .progress-steps {
+            margin-bottom: 12px;
+        }
+
+        .progress-step {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid #222;
+        }
+
+        .progress-step:last-child {
+            border-bottom: none;
+        }
+
+        .step-indicator {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: bold;
+            flex-shrink: 0;
+            background-color: #1a1a2e;
+            color: #888;
+        }
+
+        .step-indicator.active {
+            background-color: #6366f1;
+            color: white;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        .step-indicator.completed {
+            background-color: #4ade80;
+            color: white;
+        }
+
+        .step-content {
+            flex: 1;
+            font-size: 13px;
+            color: #ccc;
+        }
+
+        .step-tool {
+            color: #4ade80;
+            font-weight: 500;
+        }
+
+        .step-detail {
+            color: #888;
+            margin-left: 4px;
+        }
+
+        .bash-command {
+            background-color: rgba(0,0,0,0.3);
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 12px;
             color: #fbbf24;
+            margin-top: 6px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            overflow-wrap: anywhere;
+        }
+
+        .progress-bar-container {
+            height: 4px;
+            background-color: #1a1a2e;
+            border-radius: 2px;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background-color: #6366f1;
+            width: 0%;
+            transition: width 0.3s;
+        }
+
+        .progress-stats {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            font-size: 12px;
+        }
+
+        .stat-item {
+            color: #888;
+        }
+
+        .stat-value {
+            color: #4ade80;
+            font-weight: 500;
+        }
+
+        /* 입력 영역 */
+        .input-container {
+            background-color: #111;
+            padding: 12px 20px;
+            padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+            border-top: 1px solid #1a1a2e;
+            flex-shrink: 0;
+        }
+
+        .input-wrapper {
+            display: flex;
+            gap: 12px;
+        }
+
+        .message-input {
+            flex: 1;
+            padding: 10px 14px;
+            border: 1px solid #222;
+            border-radius: 8px;
+            background-color: #1a1a2e;
+            color: #eee;
+            font-size: 14px;
+            resize: none;
+        }
+
+        .message-input:focus {
+            outline: none;
+            border-color: #6366f1;
+        }
+
+        .send-btn {
+            padding: 10px 24px;
+            background-color: #6366f1;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .send-btn:hover {
+            background-color: #7c7ff7;
+        }
+
+        .send-btn:disabled {
+            background-color: #666;
+            cursor: not-allowed;
+        }
+
+        /* 모바일 반응형 */
+        @media screen and (max-width: 768px) {
+            .header {
+                padding: 8px 12px;
+                padding-top: calc(8px + env(safe-area-inset-top, 0px));
+                flex-wrap: wrap;
+                gap: 6px;
+            }
+
+            .header h1 {
+                font-size: 16px;
+            }
+
+            .header-right {
+                gap: 8px;
+                flex-wrap: wrap;
+                justify-content: flex-end;
+            }
+
+            .header-btn {
+                padding: 5px 8px;
+                font-size: 11px;
+            }
+
+            .connection-status {
+                font-size: 12px;
+                gap: 4px;
+            }
+
+            .status-dot {
+                width: 8px;
+                height: 8px;
+            }
+
+            .queue-container {
+                padding: 6px 12px;
+            }
+
+            .chat-area {
+                padding: 12px;
+            }
+
+            .message {
+                max-width: 95%;
+                margin-bottom: 12px;
+            }
+
+            .message .content {
+                padding: 8px 12px;
+                font-size: 14px;
+            }
+
+            .progress-container {
+                padding: 12px;
+            }
+
+            .progress-icon {
+                width: 28px;
+                height: 28px;
+                font-size: 12px;
+            }
+
+            .input-container {
+                padding: 10px 12px;
+                padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+            }
+
+            .input-wrapper {
+                gap: 8px;
+            }
+
+            .message-input {
+                padding: 8px 10px;
+                font-size: 13px;
+            }
+
+            .send-btn {
+                padding: 8px 16px;
+                font-size: 13px;
+            }
+        }
+
+        @media screen and (max-width: 480px) {
+            .header {
+                padding: 6px 10px;
+                padding-top: calc(6px + env(safe-area-inset-top, 0px));
+            }
+
+            .header h1 {
+                font-size: 14px;
+            }
+
+            .usage-container {
+                font-size: 9px;
+                gap: 4px;
+            }
+
+            .usage-label {
+                display: none;
+            }
+
+            .usage-divider {
+                display: none;
+            }
+
+            .chat-area {
+                padding: 8px;
+            }
+
+            .message {
+                max-width: 100%;
+            }
+
+            .message .content {
+                padding: 6px 10px;
+                font-size: 13px;
+            }
+
+            .input-container {
+                padding: 8px 10px;
+                padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+            }
+
+            .input-wrapper {
+                gap: 6px;
+            }
+
+            .message-input {
+                padding: 6px 8px;
+                font-size: 12px;
+            }
+
+            .send-btn {
+                padding: 6px 12px;
+                font-size: 12px;
+            }
         }
     </style>
 </head>
 <body>
     <!-- 로그인 화면 -->
     <div class="login-container" id="loginContainer">
-        <h1>Claude Portable</h1>
-        <form id="loginForm">
-            <div class="form-group">
-                <label for="userId">아이디</label>
-                <input type="text" id="userId" name="id" autocomplete="username" required>
-            </div>
-            <div class="form-group">
-                <label for="password">비밀번호</label>
-                <input type="password" id="password" name="password" autocomplete="current-password" required>
-            </div>
-            <button type="submit" class="login-btn" id="loginBtn">로그인</button>
-            <div class="error-message" id="errorMessage"></div>
-        </form>
+        <div class="login-box">
+            <h1>Claude Portable</h1>
+            <form id="loginForm">
+                <div class="form-group">
+                    <label for="userId">아이디</label>
+                    <input type="text" id="userId" name="id" autocomplete="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">비밀번호</label>
+                    <input type="password" id="password" name="password" autocomplete="current-password" required>
+                </div>
+                <button type="submit" class="login-btn" id="loginBtn">로그인</button>
+                <div class="error-message" id="errorMessage"></div>
+            </form>
+        </div>
     </div>
 
     <!-- 채팅 화면 -->
-    <div class="chat-container" id="chatContainer">
-        <div class="chat-header">
-            <h1>Claude Portable</h1>
-            <div class="user-info">
-                <span id="currentUser"></span>
-                <button class="logout-btn" id="logoutBtn">로그아웃</button>
+    <div class="app-container" id="appContainer">
+        <div class="header">
+            <h1>Claude<span>Portable</span></h1>
+            <div class="header-right">
+                <div class="usage-container" id="usageContainer">
+                    <div class="usage-item">
+                        <span class="usage-label">블록:</span>
+                        <span id="usageBlock" class="usage-value">-</span>
+                    </div>
+                    <div class="usage-item">
+                        <span class="usage-label">리셋:</span>
+                        <span id="usageRemaining" class="usage-value">-</span>
+                    </div>
+                    <span class="usage-divider">|</span>
+                    <div class="usage-item">
+                        <span class="usage-label">오늘:</span>
+                        <span id="usageToday" class="usage-value">-</span>
+                    </div>
+                </div>
+                <button class="header-btn" id="resetBtn">세션 리셋</button>
+                <div class="connection-status">
+                    <span class="status-dot" id="statusDot"></span>
+                    <span id="statusText">연결 중...</span>
+                </div>
+                <span id="currentUser" style="color: #aaa; font-size: 12px;"></span>
+                <button class="header-btn logout-btn" id="logoutBtn">로그아웃</button>
             </div>
         </div>
-        <div id="status" class="status connecting">연결 중...</div>
+
+        <div class="queue-container" id="queueContainer">
+            <div class="queue-header" id="queueHeader">
+                <div class="queue-title">
+                    <span>📋 요청 대기열</span>
+                    <span class="queue-count empty" id="queueCount">0</span>
+                </div>
+                <span class="queue-toggle" id="queueToggle">펼치기</span>
+            </div>
+            <div class="queue-body collapsed" id="queueBody">
+                <div class="queue-empty">대기 중인 요청이 없습니다.</div>
+            </div>
+        </div>
+
+        <div class="chat-area" id="chatArea">
+            <!-- 메시지가 여기에 추가됨 -->
+        </div>
+
+        <div class="input-container">
+            <div class="input-wrapper">
+                <input type="text" class="message-input" id="messageInput" placeholder="메시지를 입력하세요...">
+                <button class="send-btn" id="sendBtn" disabled>전송</button>
+            </div>
+        </div>
     </div>
 
     <script>
-        // 요소 참조
+        // USD to KRW 환율
+        const USD_TO_KRW = 1430;
+
+        // DOM 요소
         const loginContainer = document.getElementById('loginContainer');
-        const chatContainer = document.getElementById('chatContainer');
+        const appContainer = document.getElementById('appContainer');
         const loginForm = document.getElementById('loginForm');
         const loginBtn = document.getElementById('loginBtn');
         const errorMessage = document.getElementById('errorMessage');
-        const statusEl = document.getElementById('status');
+        const chatArea = document.getElementById('chatArea');
+        const messageInput = document.getElementById('messageInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
         const currentUserEl = document.getElementById('currentUser');
         const logoutBtn = document.getElementById('logoutBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const queueHeader = document.getElementById('queueHeader');
+        const queueCount = document.getElementById('queueCount');
+        const queueBody = document.getElementById('queueBody');
+        const queueToggle = document.getElementById('queueToggle');
 
         let ws = null;
         let authToken = null;
         let currentUserId = null;
+        let isConnected = false;
+        let autoScroll = true;
+        let currentProgress = null;
+        let queueCollapsed = true;
 
-        // 로그인 폼 제출
+        // ============================================================
+        // 로그인 처리
+        // ============================================================
         loginForm.addEventListener('submit', async (e) => {
             e.preventDefault();
 
@@ -239,7 +957,6 @@
         });
 
         async function logout() {
-            // 서버에 로그아웃 요청
             if (authToken) {
                 try {
                     await fetch('/logout', {
@@ -252,95 +969,514 @@
                 }
             }
 
-            // WebSocket 연결 종료
             if (ws) {
                 ws.close();
                 ws = null;
             }
             authToken = null;
             currentUserId = null;
+            isConnected = false;
 
-            // 폼 초기화
             loginForm.reset();
             errorMessage.textContent = '';
+            chatArea.innerHTML = '';
+            currentProgress = null;
 
-            // 화면 전환
-            chatContainer.style.display = 'none';
-            loginContainer.style.display = 'block';
+            appContainer.style.display = 'none';
+            loginContainer.style.display = 'flex';
         }
 
         // 채팅 화면 표시
         function showChatScreen() {
             loginContainer.style.display = 'none';
-            chatContainer.style.display = 'flex';
+            appContainer.style.display = 'flex';
             currentUserEl.textContent = currentUserId;
-
             connectWebSocket();
         }
 
+        // ============================================================
         // WebSocket 연결
+        // ============================================================
         function connectWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const host = window.location.host;
-            // 보안: 토큰을 URL에 포함하지 않고 연결 후 첫 메시지로 전송
             const wsUrl = `${protocol}//${host}/ws`;
 
-            statusEl.textContent = '연결 중...';
-            statusEl.className = 'status connecting';
+            statusText.textContent = '연결 중...';
+            statusDot.className = 'status-dot';
 
             ws = new WebSocket(wsUrl);
 
             ws.onopen = () => {
-                // 연결 후 토큰 인증 메시지 전송
                 ws.send(JSON.stringify({ type: 'auth', token: authToken }));
             };
 
             ws.onclose = (event) => {
-                statusEl.textContent = 'WebSocket 연결 끊김';
-                statusEl.className = 'status disconnected';
-
-                // 인증 실패로 인한 종료 시 로그아웃
+                updateConnectionStatus(false);
                 if (event.code === 4001 || event.code === 4002) {
                     logout();
                 }
             };
 
             ws.onerror = (error) => {
-                statusEl.textContent = 'WebSocket 오류';
-                statusEl.className = 'status disconnected';
+                updateConnectionStatus(false);
                 console.error('WebSocket error:', error);
             };
 
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-
-                    // 인증 응답 처리
-                    if (data.type === 'auth') {
-                        if (data.success) {
-                            statusEl.textContent = 'WebSocket 연결됨';
-                            statusEl.className = 'status connected';
-                        } else {
-                            statusEl.textContent = data.message || '인증 실패';
-                            statusEl.className = 'status disconnected';
-                        }
-                        return;
-                    }
-
-                    // 에러 응답 처리
-                    if (data.type === 'error') {
-                        console.error('Server error:', data.message);
-                        return;
-                    }
-
-                    // 일반 메시지
-                    console.log('Message received:', data);
+                    handleMessage(data);
                 } catch (e) {
-                    // JSON이 아닌 일반 텍스트 메시지
                     console.log('Message received:', event.data);
                 }
             };
         }
+
+        function updateConnectionStatus(connected) {
+            isConnected = connected;
+            statusDot.className = 'status-dot ' + (connected ? 'connected' : 'disconnected');
+            statusText.textContent = connected ? '연결됨' : '연결 끊김';
+            sendBtn.disabled = !connected;
+        }
+
+        // ============================================================
+        // 메시지 처리
+        // ============================================================
+        function handleMessage(data) {
+            const type = data.type || 'message';
+
+            if (type === 'auth') {
+                if (data.success) {
+                    updateConnectionStatus(true);
+                    ws.send(JSON.stringify({ type: 'usage' }));
+                    ws.send(JSON.stringify({ type: 'queue_status' }));
+                } else {
+                    statusText.textContent = data.message || '인증 실패';
+                    statusDot.className = 'status-dot disconnected';
+                }
+                return;
+            }
+
+            if (type === 'error') {
+                console.error('Server error:', data.message);
+                return;
+            }
+
+            if (type === 'system') {
+                addMessage('', data.message, 'system');
+            } else if (type === 'message') {
+                const username = data.username || '익명';
+                const message = data.message || '';
+
+                let msgType = 'other';
+                if (username === 'Claude') {
+                    msgType = 'claude';
+                } else if (username === currentUserId) {
+                    msgType = 'user';
+                }
+
+                addMessage(username, message, msgType);
+            } else if (type === 'progress') {
+                handleProgress(data);
+            } else if (type === 'queue_status') {
+                updateQueueStatus(data.count || 0, data.items || []);
+            } else if (type === 'usage_status') {
+                updateUsageStatus(data);
+            }
+        }
+
+        // ============================================================
+        // 진행 상황 UI
+        // ============================================================
+        function handleProgress(data) {
+            const progressType = data.progress_type;
+
+            switch (progressType) {
+                case 'start':
+                    createProgressUI();
+                    break;
+                case 'init':
+                    updateProgressInit(data);
+                    break;
+                case 'tool_start':
+                    updateProgressToolStart(data);
+                    break;
+                case 'tool_end':
+                    updateProgressToolEnd(data);
+                    break;
+                case 'complete':
+                    updateProgressComplete(data);
+                    break;
+                case 'error':
+                    updateProgressError(data);
+                    break;
+            }
+        }
+
+        function createProgressUI() {
+            if (currentProgress) {
+                currentProgress.remove();
+            }
+
+            const progressEl = document.createElement('div');
+            progressEl.className = 'progress-container';
+            progressEl.id = 'currentProgress';
+            progressEl.innerHTML = `
+                <div class="progress-header">
+                    <div class="progress-icon spinning">C</div>
+                    <div class="progress-title">Claude 처리 중...</div>
+                    <div class="progress-model"></div>
+                </div>
+                <div class="progress-steps"></div>
+                <div class="progress-bar-container">
+                    <div class="progress-bar" style="width: 10%"></div>
+                </div>
+                <div class="progress-stats"></div>
+            `;
+
+            chatArea.appendChild(progressEl);
+            currentProgress = progressEl;
+            scrollToBottom();
+        }
+
+        function updateProgressInit(data) {
+            if (!currentProgress) return;
+
+            const modelEl = currentProgress.querySelector('.progress-model');
+            const barEl = currentProgress.querySelector('.progress-bar');
+
+            let modelName = data.model || 'unknown';
+            if (modelName.includes('opus')) modelName = 'Opus';
+            else if (modelName.includes('sonnet')) modelName = 'Sonnet';
+            else if (modelName.includes('haiku')) modelName = 'Haiku';
+
+            modelEl.textContent = modelName;
+            barEl.style.width = '20%';
+        }
+
+        function getToolIcon(tool) {
+            const icons = {
+                'Read': '📄',
+                'Edit': '✏️',
+                'Write': '📝',
+                'Bash': '💻',
+                'Grep': '🔍',
+                'Glob': '📁',
+                'WebFetch': '🌐',
+                'WebSearch': '🔎',
+                'TodoWrite': '📋',
+                'Task': '🔄',
+                'AskUserQuestion': '❓'
+            };
+            return icons[tool] || '🔧';
+        }
+
+        function updateProgressToolStart(data) {
+            if (!currentProgress) return;
+
+            const stepsEl = currentProgress.querySelector('.progress-steps');
+            const barEl = currentProgress.querySelector('.progress-bar');
+
+            const prevStep = stepsEl.querySelector('.progress-step.active');
+            if (prevStep) {
+                prevStep.classList.remove('active');
+                prevStep.classList.add('completed');
+                const indicator = prevStep.querySelector('.step-indicator');
+                indicator.classList.remove('active');
+                indicator.classList.add('completed');
+                indicator.textContent = '✓';
+            }
+
+            const stepEl = document.createElement('div');
+            stepEl.className = 'progress-step active';
+            stepEl.dataset.turn = data.turn;
+
+            const toolIcon = getToolIcon(data.tool);
+            const tool = data.tool || 'unknown';
+            const detail = data.detail || '';
+
+            let bashHtml = '';
+            if (tool === 'Bash' && detail) {
+                bashHtml = `<div class="bash-command">${escapeHtml(detail)}</div>`;
+            }
+
+            stepEl.innerHTML = `
+                <div class="step-indicator active">${data.turn}</div>
+                <div class="step-content">
+                    <span class="step-tool">${toolIcon} ${tool}</span>
+                    ${tool !== 'Bash' && detail ? `<span class="step-detail">- ${escapeHtml(detail)}</span>` : ''}
+                    ${bashHtml}
+                </div>
+            `;
+
+            stepsEl.appendChild(stepEl);
+            barEl.style.width = `${Math.min(20 + data.turn * 15, 85)}%`;
+            scrollToBottom();
+        }
+
+        function updateProgressToolEnd(data) {
+            if (!currentProgress) return;
+
+            const stepEl = currentProgress.querySelector(`.progress-step[data-turn="${data.turn}"]`);
+            if (stepEl) {
+                stepEl.classList.remove('active');
+                stepEl.classList.add('completed');
+                const indicator = stepEl.querySelector('.step-indicator');
+                indicator.classList.remove('active');
+                indicator.classList.add('completed');
+                indicator.textContent = '✓';
+
+                if (data.lines) {
+                    const content = stepEl.querySelector('.step-content');
+                    const lineInfo = document.createElement('span');
+                    lineInfo.className = 'step-detail';
+                    lineInfo.textContent = ` (${data.lines}줄)`;
+                    content.appendChild(lineInfo);
+                }
+            }
+        }
+
+        function updateProgressComplete(data) {
+            if (!currentProgress) return;
+
+            const iconEl = currentProgress.querySelector('.progress-icon');
+            const titleEl = currentProgress.querySelector('.progress-title');
+            const barEl = currentProgress.querySelector('.progress-bar');
+            const statsEl = currentProgress.querySelector('.progress-stats');
+
+            iconEl.classList.remove('spinning');
+            iconEl.textContent = '✓';
+            iconEl.style.background = '#4ade80';
+            titleEl.textContent = 'Claude 완료';
+            titleEl.style.color = '#4ade80';
+            barEl.style.width = '100%';
+
+            const costKrw = data.cost_krw || (data.cost_usd * USD_TO_KRW);
+
+            statsEl.innerHTML = `
+                <div class="stat-item">
+                    <span>⏱️ 시간:</span>
+                    <span class="stat-value">${(data.duration_sec || 0).toFixed(1)}초</span>
+                </div>
+                <div class="stat-item">
+                    <span>💰 비용:</span>
+                    <span class="stat-value">$${(data.cost_usd || 0).toFixed(4)} (₩${Math.round(costKrw).toLocaleString()})</span>
+                </div>
+                <div class="stat-item">
+                    <span>📊 토큰:</span>
+                    <span class="stat-value">${(data.input_tokens || 0).toLocaleString()}/${(data.output_tokens || 0).toLocaleString()}</span>
+                </div>
+                <div class="stat-item">
+                    <span>🔄 턴:</span>
+                    <span class="stat-value">${data.turns || 0}</span>
+                </div>
+            `;
+
+            const lastStep = currentProgress.querySelector('.progress-step.active');
+            if (lastStep) {
+                lastStep.classList.remove('active');
+                lastStep.classList.add('completed');
+                const indicator = lastStep.querySelector('.step-indicator');
+                indicator.classList.remove('active');
+                indicator.classList.add('completed');
+                indicator.textContent = '✓';
+            }
+
+            currentProgress = null;
+        }
+
+        function updateProgressError(data) {
+            if (!currentProgress) return;
+
+            const iconEl = currentProgress.querySelector('.progress-icon');
+            const titleEl = currentProgress.querySelector('.progress-title');
+            const barEl = currentProgress.querySelector('.progress-bar');
+
+            iconEl.classList.remove('spinning');
+            iconEl.textContent = '!';
+            iconEl.style.background = '#ef4444';
+            titleEl.textContent = `오류: ${data.message || '알 수 없는 오류'}`;
+            titleEl.style.color = '#ef4444';
+            barEl.style.width = '100%';
+            barEl.style.background = '#ef4444';
+
+            currentProgress = null;
+        }
+
+        // ============================================================
+        // 큐 상태
+        // ============================================================
+        queueHeader.addEventListener('click', () => {
+            queueCollapsed = !queueCollapsed;
+            if (queueCollapsed) {
+                queueBody.classList.add('collapsed');
+                queueToggle.textContent = '펼치기';
+            } else {
+                queueBody.classList.remove('collapsed');
+                queueToggle.textContent = '접기';
+            }
+        });
+
+        function updateQueueStatus(count, items) {
+            queueCount.textContent = count;
+            if (count === 0) {
+                queueCount.classList.add('empty');
+            } else {
+                queueCount.classList.remove('empty');
+            }
+
+            if (items && items.length > 0) {
+                let itemsHtml = '';
+                items.forEach((item, index) => {
+                    itemsHtml += `
+                        <div class="queue-item">
+                            <div class="queue-item-number">${index + 1}</div>
+                            <div class="queue-item-content">
+                                <div class="queue-item-sender">${escapeHtml(item.sender)}</div>
+                                <div class="queue-item-message">${escapeHtml(item.message)}</div>
+                            </div>
+                        </div>
+                    `;
+                });
+                queueBody.innerHTML = itemsHtml;
+            } else {
+                queueBody.innerHTML = '<div class="queue-empty">대기 중인 요청이 없습니다.</div>';
+            }
+        }
+
+        // ============================================================
+        // 사용량 상태
+        // ============================================================
+        function updateUsageStatus(data) {
+            const { today, block } = data;
+
+            const usageTodayEl = document.getElementById('usageToday');
+            const usageBlockEl = document.getElementById('usageBlock');
+            const usageRemainingEl = document.getElementById('usageRemaining');
+
+            if (usageTodayEl) {
+                if (today && today.totalCost !== undefined) {
+                    const todayCostUsd = today.totalCost;
+                    const todayCostKrw = todayCostUsd * USD_TO_KRW;
+                    usageTodayEl.textContent = `$${todayCostUsd.toFixed(2)} (₩${Math.round(todayCostKrw).toLocaleString()})`;
+
+                    usageTodayEl.classList.remove('warning', 'danger');
+                    if (todayCostUsd >= 100) {
+                        usageTodayEl.classList.add('danger');
+                    } else if (todayCostUsd >= 50) {
+                        usageTodayEl.classList.add('warning');
+                    }
+                } else {
+                    usageTodayEl.textContent = '$0.00';
+                }
+            }
+
+            if (usageBlockEl) {
+                if (block && block.costUSD !== undefined) {
+                    const blockCostUsd = block.costUSD;
+                    const blockCostKrw = blockCostUsd * USD_TO_KRW;
+                    usageBlockEl.textContent = `$${blockCostUsd.toFixed(2)} (₩${Math.round(blockCostKrw).toLocaleString()})`;
+                } else {
+                    usageBlockEl.textContent = '-';
+                }
+            }
+
+            if (usageRemainingEl) {
+                if (block && block.remainingMinutes !== undefined) {
+                    const remaining = block.remainingMinutes;
+                    if (remaining > 60) {
+                        const hours = Math.floor(remaining / 60);
+                        const mins = remaining % 60;
+                        usageRemainingEl.textContent = `${hours}시간 ${mins}분`;
+                    } else {
+                        usageRemainingEl.textContent = `${remaining}분`;
+                    }
+
+                    usageRemainingEl.classList.remove('warning', 'danger');
+                    if (remaining <= 30) {
+                        usageRemainingEl.classList.add('danger');
+                    } else if (remaining <= 60) {
+                        usageRemainingEl.classList.add('warning');
+                    }
+                } else {
+                    usageRemainingEl.textContent = '-';
+                }
+            }
+        }
+
+        // ============================================================
+        // 메시지 UI
+        // ============================================================
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function addMessage(username, message, type = 'other') {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+
+            if (type === 'system') {
+                messageDiv.innerHTML = `<span class="content">${escapeHtml(message)}</span>`;
+            } else {
+                let renderedMessage = message;
+                try {
+                    renderedMessage = marked.parse(message);
+                } catch (e) {
+                    renderedMessage = escapeHtml(message);
+                }
+
+                messageDiv.innerHTML = `
+                    <div class="username">${escapeHtml(username)}</div>
+                    <div class="content">${renderedMessage}</div>
+                `;
+            }
+
+            chatArea.appendChild(messageDiv);
+            scrollToBottom();
+        }
+
+        function scrollToBottom() {
+            if (autoScroll) {
+                requestAnimationFrame(() => {
+                    chatArea.scrollTop = chatArea.scrollHeight;
+                });
+            }
+        }
+
+        // ============================================================
+        // 메시지 전송
+        // ============================================================
+        function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message || !isConnected) return;
+
+            ws.send(JSON.stringify({
+                type: 'chat',
+                message: message
+            }));
+
+            addMessage(currentUserId, message, 'user');
+            messageInput.value = '';
+        }
+
+        sendBtn.addEventListener('click', sendMessage);
+
+        messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // 세션 리셋 버튼
+        resetBtn.addEventListener('click', () => {
+            if (isConnected) {
+                ws.send(JSON.stringify({ type: 'reset' }));
+            }
+        });
     </script>
 </body>
 </html>
