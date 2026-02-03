@@ -281,8 +281,10 @@
         /* 토글 스위치 */
         .toggle-switch {
             position: relative;
+            display: inline-block;
             width: 44px;
             height: 24px;
+            cursor: pointer;
         }
 
         .toggle-switch input {
@@ -984,18 +986,18 @@
                     <div class="settings-panel" id="settingsPanel">
                         <h3>⚙️ UI 설정</h3>
                         <div class="settings-item">
-                            <label for="autoScrollToggle">📜 자동 스크롤</label>
-                            <div class="toggle-switch">
+                            <span>📜 자동 스크롤</span>
+                            <label class="toggle-switch">
                                 <input type="checkbox" id="autoScrollToggle" checked>
                                 <span class="toggle-slider"></span>
-                            </div>
+                            </label>
                         </div>
                         <div class="settings-item">
-                            <label for="soundToggle">🔔 알림 소리</label>
-                            <div class="toggle-switch">
+                            <span>🔔 알림 소리</span>
+                            <label class="toggle-switch">
                                 <input type="checkbox" id="soundToggle" checked>
                                 <span class="toggle-slider"></span>
-                            </div>
+                            </label>
                         </div>
                     </div>
                 </div>
