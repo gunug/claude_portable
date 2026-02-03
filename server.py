@@ -452,6 +452,7 @@ def get_claude_usage():
             timeout=30
         )
         if result.returncode != 0:
+            print(f"[ccusage daily 실패] returncode={result.returncode}, stderr={result.stderr[:200] if result.stderr else 'none'}")
             return None
 
         data = json.loads(result.stdout)
@@ -470,7 +471,8 @@ def get_claude_usage():
             "totals": totals,
             "date": today
         }
-    except Exception:
+    except Exception as e:
+        print(f"[ccusage daily 예외] {type(e).__name__}: {e}")
         return None
 
 
@@ -486,6 +488,7 @@ def get_claude_blocks():
             timeout=30
         )
         if result.returncode != 0:
+            print(f"[ccusage blocks 실패] returncode={result.returncode}, stderr={result.stderr[:200] if result.stderr else 'none'}")
             return None
 
         data = json.loads(result.stdout)
@@ -513,7 +516,8 @@ def get_claude_blocks():
             "costPerHour": burn_rate.get("costPerHour", 0) if burn_rate else 0,
             "models": active_block.get("models", [])
         }
-    except Exception:
+    except Exception as e:
+        print(f"[ccusage blocks 예외] {type(e).__name__}: {e}")
         return None
 
 
@@ -677,6 +681,8 @@ async def send_usage_status(ws=None):
         usage = await usage_task
         blocks = await blocks_task
 
+        print(f"[사용량 조회] usage={usage is not None}, blocks={blocks is not None}")
+
         combined_data = {}
         if usage:
             combined_data["today"] = usage.get("today")
@@ -686,24 +692,27 @@ async def send_usage_status(ws=None):
         if blocks:
             combined_data["block"] = blocks
 
-        if combined_data:
-            data = {
-                "type": "usage_status",
-                **combined_data
-            }
+        # 데이터가 없어도 항상 응답 (클라이언트가 기다리지 않도록)
+        data = {
+            "type": "usage_status",
+            **combined_data
+        }
 
-            if ws:
-                # 개별 클라이언트에게 전송
-                try:
-                    if not ws.closed:
-                        await ws.send_str(json.dumps(data))
-                except Exception as e:
-                    print(f"[경고] 사용량 상태 전송 실패: {e}")
-            else:
-                # 모든 클라이언트에게 브로드캐스트
-                await broadcast_to_authenticated(data)
+        if ws:
+            # 개별 클라이언트에게 전송
+            try:
+                if not ws.closed:
+                    await ws.send_str(json.dumps(data))
+                    print(f"[사용량 전송] 개별 클라이언트에 전송 완료")
+            except Exception as e:
+                print(f"[경고] 사용량 상태 전송 실패: {e}")
+        else:
+            # 모든 클라이언트에게 브로드캐스트
+            await broadcast_to_authenticated(data)
     except Exception as e:
         print(f"[경고] 사용량 상태 조회 실패: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 queue_processor_running = False  # 큐 프로세서 실행 상태 (락 안에서만 변경)
