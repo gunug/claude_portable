@@ -5,13 +5,17 @@ import json
 import threading
 import secrets
 import time
+import uuid
+import subprocess
 from datetime import datetime
+from queue import Queue, Empty
+from collections import deque
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 from aiohttp import web
 import bcrypt
 
-# 세션 토큰 저장소 (메모리)
+# 세션 토큰 저장소 (메모리) - 로그인 세션
 # {token: {"id": user_id, "created_at": timestamp, "expires_at": timestamp}}
 sessions = {}
 
@@ -21,6 +25,23 @@ token_connections = {}
 
 # 로그인 시도 기록 (메모리) - {ip: {"count": n, "first_attempt": timestamp}}
 login_attempts = {}
+
+# ============================================================
+# Claude CLI 관련 전역 상태
+# ============================================================
+
+# Claude 처리 상태
+claude_processing = False
+current_stop_event = None
+claude_session_id = None  # Claude 세션 ID (로그인 세션과 별도)
+claude_session_started = False
+
+# 요청 큐 관리
+request_queue = deque()  # 대기 중인 요청 큐
+queue_lock = asyncio.Lock()  # 큐 접근 동기화
+
+# 환율 (사용량 표시용)
+USD_TO_KRW = 1430
 
 # Windows asyncio 호환성 (Python 3.14 미만에서만 필요)
 if sys.platform == "win32" and sys.version_info < (3, 14):
@@ -390,6 +411,520 @@ def verify_password(password, hashed):
 
 # 전역 설정
 config = load_config()
+
+
+# ============================================================
+# Claude CLI 함수
+# ============================================================
+
+def get_claude_working_dir():
+    """Claude 작업 디렉토리 반환"""
+    work_dir = config.get("claude_working_dir", "")
+    if work_dir and os.path.isdir(work_dir):
+        return work_dir
+    return WORKING_DIR
+
+
+def get_relative_path(file_path: str) -> str:
+    """절대 경로를 작업 디렉토리 기준 상대 경로로 변환"""
+    if not file_path:
+        return ""
+    try:
+        abs_path = os.path.abspath(file_path)
+        work_dir = get_claude_working_dir()
+        if abs_path.startswith(work_dir):
+            rel_path = os.path.relpath(abs_path, work_dir)
+            return rel_path.replace("\\", "/")
+        return file_path
+    except Exception:
+        return file_path
+
+
+def get_claude_usage():
+    """ccusage를 통해 오늘의 Claude 사용량 조회"""
+    try:
+        result = subprocess.run(
+            'npx ccusage@latest daily --json',
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            shell=True,
+            timeout=30
+        )
+        if result.returncode != 0:
+            return None
+
+        data = json.loads(result.stdout)
+        daily_data = data.get("daily", [])
+        totals = data.get("totals", {})
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        today_usage = None
+        for day in daily_data:
+            if day.get("date") == today:
+                today_usage = day
+                break
+
+        return {
+            "today": today_usage,
+            "totals": totals,
+            "date": today
+        }
+    except Exception:
+        return None
+
+
+def get_claude_blocks():
+    """ccusage를 통해 5시간 블록 사용량 조회"""
+    try:
+        result = subprocess.run(
+            'npx ccusage@latest blocks --json',
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            shell=True,
+            timeout=30
+        )
+        if result.returncode != 0:
+            return None
+
+        data = json.loads(result.stdout)
+        blocks = data.get("blocks", [])
+
+        active_block = None
+        for block in blocks:
+            if block.get("isActive") and not block.get("isGap"):
+                active_block = block
+                break
+
+        if not active_block:
+            return None
+
+        projection = active_block.get("projection", {})
+        burn_rate = active_block.get("burnRate", {})
+
+        return {
+            "startTime": active_block.get("startTime"),
+            "endTime": active_block.get("endTime"),
+            "costUSD": active_block.get("costUSD", 0),
+            "totalTokens": active_block.get("totalTokens", 0),
+            "remainingMinutes": projection.get("remainingMinutes", 0) if projection else 0,
+            "projectedCost": projection.get("totalCost", 0) if projection else 0,
+            "costPerHour": burn_rate.get("costPerHour", 0) if burn_rate else 0,
+            "models": active_block.get("models", [])
+        }
+    except Exception:
+        return None
+
+
+def run_claude_stream(prompt: str, output_queue: Queue, stop_event: threading.Event,
+                      sess_id: str = None, is_resume: bool = False):
+    """별도 스레드에서 Claude CLI 스트리밍 실행"""
+    process = None
+    try:
+        cmd = 'claude --output-format stream-json --verbose'
+        if config.get("claude_skip_permissions", True):
+            cmd += ' --dangerously-skip-permissions'
+        if sess_id:
+            if is_resume:
+                cmd += f' -r "{sess_id}"'
+            else:
+                cmd += f' --session-id "{sess_id}"'
+        cmd += ' -p -'
+
+        work_dir = get_claude_working_dir()
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            stdin=subprocess.PIPE,
+            shell=True,
+            text=True,
+            encoding="utf-8",
+            bufsize=1,
+            cwd=work_dir
+        )
+
+        # stdin으로 프롬프트 전달
+        process.stdin.write(prompt)
+        process.stdin.close()
+
+        # stderr 읽기 스레드
+        def read_stderr():
+            try:
+                while not stop_event.is_set():
+                    line = process.stderr.readline()
+                    if not line:
+                        break
+                    line = line.strip()
+                    if line:
+                        output_queue.put(("stderr", line))
+            except Exception:
+                pass
+
+        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+        stderr_thread.start()
+
+        # stdout 읽기
+        try:
+            while not stop_event.is_set():
+                line = process.stdout.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if line:
+                    output_queue.put(("line", line))
+        except Exception as e:
+            output_queue.put(("error", f"stdout 읽기 오류: {e}"))
+
+        # 프로세스 종료 대기
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+        output_queue.put(("done", process.returncode))
+
+    except Exception as e:
+        output_queue.put(("error", str(e)))
+    finally:
+        if process and process.poll() is None:
+            try:
+                process.kill()
+                process.wait(timeout=5)
+            except:
+                pass
+
+
+def reset_claude_session():
+    """Claude 세션 리셋"""
+    global claude_session_id, claude_session_started
+    claude_session_id = str(uuid.uuid4())
+    claude_session_started = False
+    print(f"[Claude 세션] 리셋됨: {claude_session_id[:8]}...")
+    return claude_session_id
+
+
+# ============================================================
+# Claude 브로드캐스트 함수 (인증된 클라이언트 전용)
+# ============================================================
+
+async def broadcast_to_authenticated(message: dict, exclude_token=None):
+    """인증된 모든 클라이언트에게 메시지 전송"""
+    if not token_connections:
+        return
+
+    message_str = json.dumps(message, ensure_ascii=False)
+    disconnected = []
+
+    for token, ws in token_connections.items():
+        if token != exclude_token:
+            try:
+                if not ws.closed:
+                    await ws.send_str(message_str)
+            except Exception:
+                disconnected.append(token)
+
+    for token in disconnected:
+        token_connections.pop(token, None)
+
+
+async def send_progress(progress_type: str, data: dict):
+    """진행 상황 브로드캐스트"""
+    await broadcast_to_authenticated({
+        "type": "progress",
+        "progress_type": progress_type,
+        **data
+    })
+
+
+async def send_queue_status():
+    """현재 큐 상태를 모든 클라이언트에게 브로드캐스트"""
+    items = []
+    for req in request_queue:
+        items.append({
+            "sender": req["sender"],
+            "message": req["message"][:50] + ("..." if len(req["message"]) > 50 else "")
+        })
+
+    await broadcast_to_authenticated({
+        "type": "queue_status",
+        "count": len(request_queue),
+        "items": items
+    })
+
+
+async def send_usage_status():
+    """Claude 사용량 상태를 모든 클라이언트에게 브로드캐스트"""
+    try:
+        loop = asyncio.get_event_loop()
+        usage_task = loop.run_in_executor(None, get_claude_usage)
+        blocks_task = loop.run_in_executor(None, get_claude_blocks)
+
+        usage = await usage_task
+        blocks = await blocks_task
+
+        combined_data = {}
+        if usage:
+            combined_data["today"] = usage.get("today")
+            combined_data["totals"] = usage.get("totals")
+            combined_data["date"] = usage.get("date")
+
+        if blocks:
+            combined_data["block"] = blocks
+
+        if combined_data:
+            await broadcast_to_authenticated({
+                "type": "usage_status",
+                **combined_data
+            })
+    except Exception as e:
+        print(f"[경고] 사용량 상태 전송 실패: {e}")
+
+
+async def add_to_queue(message: str, sender: str):
+    """요청을 큐에 추가"""
+    async with queue_lock:
+        request_queue.append({
+            "sender": sender,
+            "message": message
+        })
+        print(f"[큐] 요청 추가: {sender} (대기: {len(request_queue)}개)")
+        await send_queue_status()
+
+    # 처리 시작 (처리 중이 아닐 때만)
+    if not claude_processing:
+        asyncio.create_task(process_queue())
+
+
+async def process_queue():
+    """큐에서 요청을 꺼내 순차 처리"""
+    global claude_processing
+
+    while True:
+        async with queue_lock:
+            if not request_queue:
+                print("[큐] 모든 요청 처리 완료")
+                return
+            request = request_queue[0]
+
+        await ask_claude(request["message"], request["sender"])
+
+        async with queue_lock:
+            if request_queue and request_queue[0] == request:
+                request_queue.popleft()
+                print(f"[큐] 요청 완료 (남은: {len(request_queue)}개)")
+            await send_queue_status()
+            await send_usage_status()
+
+
+async def ask_claude(message: str, sender: str, retry_count: int = 0):
+    """Claude CLI에 메시지 전달하고 응답 받기"""
+    global claude_processing, current_stop_event, claude_session_id, claude_session_started
+
+    MAX_RETRY = 1
+    CLAUDE_TIMEOUT = config.get("claude_timeout", 300)
+
+    claude_processing = True
+    current_stop_event = threading.Event()
+
+    try:
+        await send_progress("start", {"message": "Claude 처리 시작"})
+        print(f"[Claude] 처리 시작: {sender} - {message[:50]}...")
+
+        prompt = f"[{sender}]: {message}"
+        output_queue = Queue()
+
+        thread = threading.Thread(
+            target=run_claude_stream,
+            args=(prompt, output_queue, current_stop_event, claude_session_id, claude_session_started)
+        )
+        thread.start()
+
+        final_result = ""
+        current_turn = 0
+        start_time = asyncio.get_event_loop().time()
+        session_error_detected = False
+
+        while True:
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed > CLAUDE_TIMEOUT:
+                print(f"[Claude] 타임아웃 ({CLAUDE_TIMEOUT}초)")
+                current_stop_event.set()
+                await send_progress("error", {"message": f"타임아웃 ({CLAUDE_TIMEOUT}초)"})
+                reset_claude_session()
+                break
+
+            try:
+                item = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(
+                        None, lambda: output_queue.get(timeout=1)
+                    ),
+                    timeout=2
+                )
+            except (asyncio.TimeoutError, Empty):
+                continue
+
+            msg_type, content = item
+
+            if msg_type == "done":
+                if session_error_detected and retry_count < MAX_RETRY:
+                    print(f"[Claude] 세션 에러로 인한 재시도 ({retry_count + 1}/{MAX_RETRY})")
+                    thread.join(timeout=5)
+                    reset_claude_session()
+                    claude_processing = False
+                    await send_progress("retry", {"message": "세션 에러 - 새 세션으로 재시도 중..."})
+                    return await ask_claude(message, sender, retry_count + 1)
+                break
+            elif msg_type == "error":
+                print(f"[Claude 오류]: {content}")
+                await send_progress("error", {"message": content})
+                break
+            elif msg_type == "stderr":
+                content_lower = content.lower()
+                if "state" in content_lower or "session" in content_lower or "invalid" in content_lower:
+                    print(f"[Claude] 세션 에러 감지: {content}")
+                    session_error_detected = True
+            elif msg_type == "line":
+                try:
+                    data = json.loads(content)
+                    json_type = data.get("type", "")
+
+                    if json_type == "system" and data.get("subtype") == "init":
+                        model = data.get("model", "unknown")
+                        print(f"[Claude] 모델: {model}")
+                        await send_progress("init", {
+                            "model": model,
+                            "session_id": data.get("session_id", "")
+                        })
+
+                    elif json_type == "assistant":
+                        msg = data.get("message", {})
+                        if isinstance(msg, dict):
+                            msg_content = msg.get("content", [])
+                            if isinstance(msg_content, list):
+                                for content_item in msg_content:
+                                    if not isinstance(content_item, dict):
+                                        continue
+
+                                    if content_item.get("type") == "tool_use":
+                                        tool_name = content_item.get("name", "unknown")
+                                        tool_input = content_item.get("input", {})
+                                        if not isinstance(tool_input, dict):
+                                            tool_input = {}
+                                        current_turn += 1
+
+                                        detail = ""
+                                        edit_info = None
+
+                                        if tool_name == "Read":
+                                            file_path = tool_input.get("file_path", "")
+                                            detail = get_relative_path(file_path) if file_path else ""
+                                        elif tool_name == "Bash":
+                                            cmd = tool_input.get("command", "")
+                                            detail = cmd[:100] if cmd else ""
+                                        elif tool_name == "Edit":
+                                            file_path = tool_input.get("file_path", "")
+                                            rel_path = get_relative_path(file_path)
+                                            detail = rel_path if file_path else ""
+                                            old_string = tool_input.get("old_string", "")
+                                            new_string = tool_input.get("new_string", "")
+                                            if old_string or new_string:
+                                                edit_info = {
+                                                    "type": "edit",
+                                                    "file": rel_path,
+                                                    "old": old_string[:500] if old_string else "",
+                                                    "new": new_string[:500] if new_string else ""
+                                                }
+                                        elif tool_name == "Write":
+                                            file_path = tool_input.get("file_path", "")
+                                            rel_path = get_relative_path(file_path)
+                                            detail = rel_path if file_path else ""
+                                            write_content = tool_input.get("content", "")
+                                            if write_content:
+                                                edit_info = {
+                                                    "type": "write",
+                                                    "file": rel_path,
+                                                    "content": write_content[:500] if write_content else ""
+                                                }
+                                        elif tool_name == "Grep":
+                                            detail = tool_input.get("pattern", "") or ""
+
+                                        print(f"[Claude] [{current_turn}] {tool_name} {detail}")
+                                        progress_data = {
+                                            "turn": current_turn,
+                                            "tool": tool_name,
+                                            "detail": detail
+                                        }
+                                        if edit_info:
+                                            progress_data["edit_info"] = edit_info
+                                        await send_progress("tool_start", progress_data)
+
+                                    elif content_item.get("type") == "text":
+                                        final_result = content_item.get("text", "")
+
+                    elif json_type == "user":
+                        tool_result = data.get("tool_use_result", {})
+                        if tool_result and isinstance(tool_result, dict):
+                            file_info = tool_result.get("file", {})
+                            if file_info and isinstance(file_info, dict):
+                                lines = file_info.get("numLines", 0)
+                                await send_progress("tool_end", {
+                                    "turn": current_turn,
+                                    "lines": lines
+                                })
+                            else:
+                                await send_progress("tool_end", {"turn": current_turn})
+
+                    elif json_type == "result":
+                        total_turns = data.get("num_turns", 0)
+                        duration_ms = data.get("duration_ms", 0)
+                        cost_usd = data.get("total_cost_usd", 0)
+                        usage = data.get("usage", {})
+                        if not isinstance(usage, dict):
+                            usage = {}
+
+                        duration_sec = duration_ms / 1000
+                        input_tokens = usage.get("input_tokens", 0)
+                        output_tokens = usage.get("output_tokens", 0)
+                        cache_tokens = usage.get("cache_read_input_tokens", 0)
+
+                        final_result = data.get("result", final_result)
+
+                        cost_krw = cost_usd * USD_TO_KRW
+                        print(f"[Claude] 완료 | {duration_sec:.1f}초 | ${cost_usd:.4f} (₩{cost_krw:.0f})")
+                        await send_progress("complete", {
+                            "duration_sec": duration_sec,
+                            "cost_usd": cost_usd,
+                            "cost_krw": cost_krw,
+                            "input_tokens": input_tokens + cache_tokens,
+                            "output_tokens": output_tokens,
+                            "turns": total_turns
+                        })
+
+                except json.JSONDecodeError:
+                    continue
+
+        thread.join(timeout=10)
+
+        if final_result:
+            print(f"[Claude]: {final_result[:100]}...")
+            await broadcast_to_authenticated({
+                "type": "message",
+                "username": "Claude",
+                "message": final_result
+            })
+            if not claude_session_started:
+                claude_session_started = True
+                print(f"[Claude] 세션 시작됨: {claude_session_id[:8]}...")
+
+    except Exception as e:
+        print(f"[Claude 오류]: {type(e).__name__}: {e}")
+        await send_progress("error", {"message": str(e)})
+    finally:
+        claude_processing = False
 
 
 # ============================================================
