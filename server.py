@@ -640,8 +640,8 @@ async def send_progress(progress_type: str, data: dict):
     })
 
 
-async def send_queue_status():
-    """현재 큐 상태를 모든 클라이언트에게 브로드캐스트"""
+async def send_queue_status(ws=None):
+    """현재 큐 상태를 클라이언트에게 전송 (ws가 없으면 브로드캐스트)"""
     items = []
     for req in request_queue:
         items.append({
@@ -649,15 +649,26 @@ async def send_queue_status():
             "message": req["message"][:50] + ("..." if len(req["message"]) > 50 else "")
         })
 
-    await broadcast_to_authenticated({
+    data = {
         "type": "queue_status",
         "count": len(request_queue),
         "items": items
-    })
+    }
+
+    if ws:
+        # 개별 클라이언트에게 전송
+        try:
+            if not ws.closed:
+                await ws.send_str(json.dumps(data))
+        except Exception as e:
+            print(f"[경고] 큐 상태 전송 실패: {e}")
+    else:
+        # 모든 클라이언트에게 브로드캐스트
+        await broadcast_to_authenticated(data)
 
 
-async def send_usage_status():
-    """Claude 사용량 상태를 모든 클라이언트에게 브로드캐스트"""
+async def send_usage_status(ws=None):
+    """Claude 사용량 상태를 클라이언트에게 전송 (ws가 없으면 브로드캐스트)"""
     try:
         loop = asyncio.get_event_loop()
         usage_task = loop.run_in_executor(None, get_claude_usage)
@@ -676,12 +687,23 @@ async def send_usage_status():
             combined_data["block"] = blocks
 
         if combined_data:
-            await broadcast_to_authenticated({
+            data = {
                 "type": "usage_status",
                 **combined_data
-            })
+            }
+
+            if ws:
+                # 개별 클라이언트에게 전송
+                try:
+                    if not ws.closed:
+                        await ws.send_str(json.dumps(data))
+                except Exception as e:
+                    print(f"[경고] 사용량 상태 전송 실패: {e}")
+            else:
+                # 모든 클라이언트에게 브로드캐스트
+                await broadcast_to_authenticated(data)
     except Exception as e:
-        print(f"[경고] 사용량 상태 전송 실패: {e}")
+        print(f"[경고] 사용량 상태 조회 실패: {e}")
 
 
 async def add_to_queue(message: str, sender: str):
@@ -1095,9 +1117,62 @@ async def handle_websocket(request):
                     except json.JSONDecodeError:
                         await ws.send_str(json.dumps({"type": "error", "message": "Invalid JSON"}))
                 else:
-                    # 인증 후: 일반 메시지 처리
-                    print(f"[수신] {user_id}: {msg.data}")
-                    await ws.send_str(f"서버 수신: {msg.data}")
+                    # 인증 후: 메시지 타입별 처리
+                    try:
+                        data = json.loads(msg.data)
+                        msg_type = data.get("type", "")
+
+                        if msg_type == "chat":
+                            # 채팅 메시지 처리 - Claude CLI로 전송
+                            message = data.get("message", "").strip()
+                            if message:
+                                print(f"[채팅] {user_id}: {message}")
+                                # 큐에 추가하고 처리
+                                await add_to_queue(message, user_id)
+                            else:
+                                await ws.send_str(json.dumps({
+                                    "type": "error",
+                                    "message": "빈 메시지는 전송할 수 없습니다."
+                                }))
+
+                        elif msg_type == "usage":
+                            # 사용량 조회 요청
+                            print(f"[사용량 조회] {user_id}")
+                            asyncio.create_task(send_usage_status(ws))
+
+                        elif msg_type == "reset":
+                            # Claude 세션 리셋 요청
+                            print(f"[세션 리셋] {user_id}")
+                            reset_claude_session()
+                            await ws.send_str(json.dumps({
+                                "type": "system",
+                                "message": "Claude 세션이 리셋되었습니다."
+                            }))
+                            # 모든 클라이언트에 알림
+                            await broadcast_to_authenticated({
+                                "type": "system",
+                                "message": f"{user_id}님이 Claude 세션을 리셋했습니다."
+                            })
+
+                        elif msg_type == "queue_status":
+                            # 큐 상태 조회
+                            print(f"[큐 상태 조회] {user_id}")
+                            await send_queue_status(ws)
+
+                        else:
+                            # 알 수 없는 메시지 타입
+                            print(f"[알 수 없는 타입] {user_id}: {msg_type}")
+                            await ws.send_str(json.dumps({
+                                "type": "error",
+                                "message": f"알 수 없는 메시지 타입: {msg_type}"
+                            }))
+
+                    except json.JSONDecodeError:
+                        # JSON이 아닌 경우 일반 텍스트로 처리 (chat으로 간주)
+                        message = msg.data.strip()
+                        if message:
+                            print(f"[채팅] {user_id}: {message}")
+                            await add_to_queue(message, user_id)
 
             elif msg.type == web.WSMsgType.ERROR:
                 print(f"[오류] WebSocket 오류: {ws.exception()}")
