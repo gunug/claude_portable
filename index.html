@@ -330,6 +330,135 @@
             position: relative;
         }
 
+        /* 사용량 정보 아이콘 */
+        .usage-info-icon {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #333;
+            color: #888;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+
+        .usage-info-icon:hover {
+            background: #4ade80;
+            color: #000;
+        }
+
+        .usage-info-icon.active {
+            background: #4ade80;
+            color: #000;
+        }
+
+        /* 사용량 정보 패널 */
+        .usage-info-panel {
+            position: fixed;
+            top: 60px;
+            right: 16px;
+            width: 340px;
+            max-width: calc(100vw - 32px);
+            max-height: calc(100vh - 150px);
+            background: #1a1a2e;
+            border: 1px solid #4ade80;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            z-index: 200;
+            overflow: hidden;
+            display: none;
+        }
+
+        .usage-info-panel.visible {
+            display: block;
+        }
+
+        .usage-info-header {
+            background: #0d1b2a;
+            padding: 10px 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid #333;
+        }
+
+        .usage-info-title {
+            color: #4ade80;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .usage-info-close {
+            color: #888;
+            cursor: pointer;
+            font-size: 18px;
+            line-height: 1;
+        }
+
+        .usage-info-close:hover {
+            color: #ef4444;
+        }
+
+        .usage-info-body {
+            padding: 14px;
+            overflow-y: auto;
+            max-height: calc(100vh - 220px);
+            font-size: 12px;
+            line-height: 1.6;
+            color: #ccc;
+        }
+
+        .usage-info-body h3 {
+            color: #6366f1;
+            font-size: 13px;
+            margin: 14px 0 8px 0;
+        }
+
+        .usage-info-body h3:first-child {
+            margin-top: 0;
+        }
+
+        .usage-info-body table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 8px 0;
+            font-size: 11px;
+        }
+
+        .usage-info-body th, .usage-info-body td {
+            border: 1px solid #333;
+            padding: 6px 8px;
+            text-align: left;
+        }
+
+        .usage-info-body th {
+            background: #0a0a0a;
+            color: #6366f1;
+        }
+
+        .usage-info-body ul {
+            margin: 8px 0;
+            padding-left: 18px;
+        }
+
+        .usage-info-body li {
+            margin: 4px 0;
+        }
+
+        .usage-info-body .note {
+            background: #0a0a0a;
+            border-left: 3px solid #f59e0b;
+            padding: 8px 12px;
+            margin: 10px 0;
+            font-size: 11px;
+            color: #f59e0b;
+        }
+
         /* 사용량 UI */
         .usage-container {
             display: flex;
@@ -974,6 +1103,7 @@
                         <span class="usage-label">오늘:</span>
                         <span id="usageToday" class="usage-value">-</span>
                     </div>
+                    <span id="usageInfoIcon" class="usage-info-icon" title="사용량 제한 정보">?</span>
                 </div>
                 <button class="header-btn" id="resetBtn">세션 리셋</button>
                 <div class="connection-status">
@@ -1002,6 +1132,57 @@
                     </div>
                 </div>
                 <button class="header-btn logout-btn" id="logoutBtn">로그아웃</button>
+            </div>
+        </div>
+
+        <!-- 사용량 정보 패널 -->
+        <div id="usageInfoPanel" class="usage-info-panel">
+            <div class="usage-info-header">
+                <span class="usage-info-title">📊 Claude Code 사용량 제한 정보</span>
+                <span id="usageInfoClose" class="usage-info-close">×</span>
+            </div>
+            <div class="usage-info-body">
+                <h3>플랜별 예상 사용량 (5시간 블록 기준)</h3>
+                <table>
+                    <tr>
+                        <th>플랜</th>
+                        <th>월 요금</th>
+                        <th>예상 메시지 수</th>
+                    </tr>
+                    <tr>
+                        <td>Pro</td>
+                        <td>$20</td>
+                        <td>약 45개 (실제 10-40개)</td>
+                    </tr>
+                    <tr>
+                        <td>Max 5x</td>
+                        <td>$100</td>
+                        <td>약 225개 이상</td>
+                    </tr>
+                    <tr>
+                        <td>Max 20x</td>
+                        <td>$200</td>
+                        <td>약 900개 이상</td>
+                    </tr>
+                </table>
+
+                <h3>5시간 롤링 윈도우</h3>
+                <ul>
+                    <li>첫 메시지 전송 시 5시간 타이머 시작</li>
+                    <li>5시간 후 다음 메시지 전송 시 리셋</li>
+                    <li>Claude 웹/앱과 Claude Code가 동일한 한도 공유</li>
+                </ul>
+
+                <h3>주간 제한</h3>
+                <ul>
+                    <li>Pro: 약 40-80시간</li>
+                    <li>Max: 비례하여 증가</li>
+                </ul>
+
+                <div class="note">
+                    ⚠️ 정확한 수치는 Anthropic에서 공식 공개하지 않습니다.<br>
+                    사용량은 모델, 컨텍스트 길이, 응답 복잡도에 따라 달라집니다.
+                </div>
             </div>
         </div>
 
@@ -1123,6 +1304,44 @@
                 settingsPanel.classList.remove('show');
             }
         });
+
+        // ============================================================
+        // 사용량 정보 패널
+        // ============================================================
+        const usageInfoIcon = document.getElementById('usageInfoIcon');
+        const usageInfoPanel = document.getElementById('usageInfoPanel');
+        const usageInfoClose = document.getElementById('usageInfoClose');
+
+        if (usageInfoIcon && usageInfoPanel) {
+            // 아이콘 클릭 시 토글
+            usageInfoIcon.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isVisible = usageInfoPanel.classList.contains('visible');
+                if (isVisible) {
+                    usageInfoPanel.classList.remove('visible');
+                    usageInfoIcon.classList.remove('active');
+                } else {
+                    usageInfoPanel.classList.add('visible');
+                    usageInfoIcon.classList.add('active');
+                }
+            });
+
+            // 닫기 버튼 클릭
+            if (usageInfoClose) {
+                usageInfoClose.addEventListener('click', () => {
+                    usageInfoPanel.classList.remove('visible');
+                    usageInfoIcon.classList.remove('active');
+                });
+            }
+
+            // 패널 외부 클릭 시 닫기
+            document.addEventListener('click', (e) => {
+                if (!usageInfoPanel.contains(e.target) && !usageInfoIcon.contains(e.target)) {
+                    usageInfoPanel.classList.remove('visible');
+                    usageInfoIcon.classList.remove('active');
+                }
+            });
+        }
 
         // 자동 스크롤 토글
         autoScrollToggle.addEventListener('change', () => {
@@ -1611,6 +1830,7 @@
         // 사용량 상태
         // ============================================================
         function updateUsageStatus(data) {
+            console.log('[사용량 수신]', data);
             const { today, block } = data;
 
             const usageTodayEl = document.getElementById('usageToday');
