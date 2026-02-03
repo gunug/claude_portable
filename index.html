@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claude Portable</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background-color: #0a0a0a;
+            color: #eee;
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* 로그인 화면 */
+        .login-container {
+            background-color: #1a1a2e;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            width: 100%;
+            max-width: 360px;
+        }
+        .login-container h1 {
+            color: #6366f1;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 24px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #aaa;
+            font-size: 14px;
+        }
+        .form-group input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #333;
+            border-radius: 6px;
+            background-color: #0a0a0a;
+            color: #eee;
+            font-size: 16px;
+        }
+        .form-group input:focus {
+            outline: none;
+            border-color: #6366f1;
+        }
+        .login-btn {
+            width: 100%;
+            padding: 14px;
+            background-color: #6366f1;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .login-btn:hover {
+            background-color: #5558e3;
+        }
+        .login-btn:disabled {
+            background-color: #444;
+            cursor: not-allowed;
+        }
+        .error-message {
+            color: #ef4444;
+            text-align: center;
+            margin-top: 15px;
+            font-size: 14px;
+            min-height: 20px;
+        }
+
+        /* 채팅 화면 */
+        .chat-container {
+            display: none;
+            flex-direction: column;
+            width: 100%;
+            height: 100vh;
+            padding: 20px;
+        }
+        .chat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #333;
+        }
+        .chat-header h1 {
+            color: #6366f1;
+            margin: 0;
+            font-size: 20px;
+        }
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .user-info span {
+            color: #aaa;
+        }
+        .logout-btn {
+            padding: 8px 16px;
+            background-color: #ef4444;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .logout-btn:hover {
+            background-color: #dc2626;
+        }
+        .status {
+            padding: 8px 12px;
+            border-radius: 6px;
+            margin: 15px 0;
+            display: inline-block;
+            font-size: 14px;
+        }
+        .status.connected {
+            background-color: #1a3a1a;
+            border: 1px solid #4ade80;
+            color: #4ade80;
+        }
+        .status.disconnected {
+            background-color: #3a1a1a;
+            border: 1px solid #ef4444;
+            color: #ef4444;
+        }
+        .status.connecting {
+            background-color: #3a3a1a;
+            border: 1px solid #fbbf24;
+            color: #fbbf24;
+        }
+    </style>
+</head>
+<body>
+    <!-- 로그인 화면 -->
+    <div class="login-container" id="loginContainer">
+        <h1>Claude Portable</h1>
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="userId">아이디</label>
+                <input type="text" id="userId" name="id" autocomplete="username" required>
+            </div>
+            <div class="form-group">
+                <label for="password">비밀번호</label>
+                <input type="password" id="password" name="password" autocomplete="current-password" required>
+            </div>
+            <button type="submit" class="login-btn" id="loginBtn">로그인</button>
+            <div class="error-message" id="errorMessage"></div>
+        </form>
+    </div>
+
+    <!-- 채팅 화면 -->
+    <div class="chat-container" id="chatContainer">
+        <div class="chat-header">
+            <h1>Claude Portable</h1>
+            <div class="user-info">
+                <span id="currentUser"></span>
+                <button class="logout-btn" id="logoutBtn">로그아웃</button>
+            </div>
+        </div>
+        <div id="status" class="status connecting">연결 중...</div>
+    </div>
+
+    <script>
+        // 요소 참조
+        const loginContainer = document.getElementById('loginContainer');
+        const chatContainer = document.getElementById('chatContainer');
+        const loginForm = document.getElementById('loginForm');
+        const loginBtn = document.getElementById('loginBtn');
+        const errorMessage = document.getElementById('errorMessage');
+        const statusEl = document.getElementById('status');
+        const currentUserEl = document.getElementById('currentUser');
+        const logoutBtn = document.getElementById('logoutBtn');
+
+        let ws = null;
+        let authToken = null;
+        let currentUserId = null;
+
+        // 로그인 폼 제출
+        loginForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const userId = document.getElementById('userId').value.trim();
+            const password = document.getElementById('password').value;
+
+            if (!userId || !password) {
+                errorMessage.textContent = '아이디와 비밀번호를 입력하세요.';
+                return;
+            }
+
+            loginBtn.disabled = true;
+            loginBtn.textContent = '로그인 중...';
+            errorMessage.textContent = '';
+
+            try {
+                const response = await fetch('/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: userId, password: password })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    authToken = result.token;
+                    currentUserId = result.id;
+                    showChatScreen();
+                } else {
+                    errorMessage.textContent = result.message || '로그인 실패';
+                }
+            } catch (error) {
+                errorMessage.textContent = '서버 연결 오류';
+                console.error('Login error:', error);
+            } finally {
+                loginBtn.disabled = false;
+                loginBtn.textContent = '로그인';
+            }
+        });
+
+        // 로그아웃
+        logoutBtn.addEventListener('click', () => {
+            logout();
+        });
+
+        async function logout() {
+            // 서버에 로그아웃 요청
+            if (authToken) {
+                try {
+                    await fetch('/logout', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ token: authToken })
+                    });
+                } catch (error) {
+                    console.error('Logout error:', error);
+                }
+            }
+
+            // WebSocket 연결 종료
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            authToken = null;
+            currentUserId = null;
+
+            // 폼 초기화
+            loginForm.reset();
+            errorMessage.textContent = '';
+
+            // 화면 전환
+            chatContainer.style.display = 'none';
+            loginContainer.style.display = 'block';
+        }
+
+        // 채팅 화면 표시
+        function showChatScreen() {
+            loginContainer.style.display = 'none';
+            chatContainer.style.display = 'flex';
+            currentUserEl.textContent = currentUserId;
+
+            connectWebSocket();
+        }
+
+        // WebSocket 연결
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.host;
+            // 보안: 토큰을 URL에 포함하지 않고 연결 후 첫 메시지로 전송
+            const wsUrl = `${protocol}//${host}/ws`;
+
+            statusEl.textContent = '연결 중...';
+            statusEl.className = 'status connecting';
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                // 연결 후 토큰 인증 메시지 전송
+                ws.send(JSON.stringify({ type: 'auth', token: authToken }));
+            };
+
+            ws.onclose = (event) => {
+                statusEl.textContent = 'WebSocket 연결 끊김';
+                statusEl.className = 'status disconnected';
+
+                // 인증 실패로 인한 종료 시 로그아웃
+                if (event.code === 4001 || event.code === 4002) {
+                    logout();
+                }
+            };
+
+            ws.onerror = (error) => {
+                statusEl.textContent = 'WebSocket 오류';
+                statusEl.className = 'status disconnected';
+                console.error('WebSocket error:', error);
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+
+                    // 인증 응답 처리
+                    if (data.type === 'auth') {
+                        if (data.success) {
+                            statusEl.textContent = 'WebSocket 연결됨';
+                            statusEl.className = 'status connected';
+                        } else {
+                            statusEl.textContent = data.message || '인증 실패';
+                            statusEl.className = 'status disconnected';
+                        }
+                        return;
+                    }
+
+                    // 에러 응답 처리
+                    if (data.type === 'error') {
+                        console.error('Server error:', data.message);
+                        return;
+                    }
+
+                    // 일반 메시지
+                    console.log('Message received:', data);
+                } catch (e) {
+                    // JSON이 아닌 일반 텍스트 메시지
+                    console.log('Message received:', event.data);
+                }
+            };
+        }
+    </script>
+</body>
+</html>
