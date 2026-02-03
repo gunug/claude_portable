@@ -727,8 +727,8 @@ async def add_to_queue(message: str, sender: str):
             queue_processor_running = True
             should_start_processor = True
 
-    # 락 밖에서 상태 전송 및 태스크 생성
-    await send_queue_status()
+    # 락 밖에서 상태 전송 및 태스크 생성 (백그라운드 태스크로 - 블로킹 방지)
+    asyncio.create_task(send_queue_status())
 
     if should_start_processor:
         asyncio.create_task(process_queue())
@@ -753,9 +753,9 @@ async def process_queue():
                     request_queue.popleft()
                     print(f"[큐] 요청 완료 (남은: {len(request_queue)}개)")
 
-            # 락 밖에서 상태 전송 (WebSocket 통신은 락 밖에서)
-            await send_queue_status()
-            await send_usage_status()
+            # 락 밖에서 상태 전송 (백그라운드 태스크로 - 블로킹 방지)
+            asyncio.create_task(send_queue_status())
+            asyncio.create_task(send_usage_status())
     finally:
         # 프로세서 종료 시 플래그 리셋 (락 안에서)
         async with queue_lock:
