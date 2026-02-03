@@ -721,14 +721,15 @@ async def add_to_queue(message: str, sender: str):
             "message": message
         })
         print(f"[큐] 요청 추가: {sender} (대기: {len(request_queue)}개)")
-        await send_queue_status()
 
         # 프로세서가 실행 중이 아니면 시작 필요
         if not queue_processor_running:
             queue_processor_running = True
             should_start_processor = True
 
-    # 락 밖에서 태스크 생성 (락 안에서 결정된 플래그 기반)
+    # 락 밖에서 상태 전송 및 태스크 생성
+    await send_queue_status()
+
     if should_start_processor:
         asyncio.create_task(process_queue())
 
@@ -751,8 +752,10 @@ async def process_queue():
                 if request_queue and request_queue[0] == request:
                     request_queue.popleft()
                     print(f"[큐] 요청 완료 (남은: {len(request_queue)}개)")
-                await send_queue_status()
-                await send_usage_status()
+
+            # 락 밖에서 상태 전송 (WebSocket 통신은 락 밖에서)
+            await send_queue_status()
+            await send_usage_status()
     finally:
         # 프로세서 종료 시 플래그 리셋 (락 안에서)
         async with queue_lock:
@@ -1133,6 +1136,7 @@ async def handle_websocket(request):
 
     try:
         async for msg in ws:
+            print(f"[WebSocket RAW] type={msg.type}, authenticated={authenticated}, user={user_id}")
             if msg.type == web.WSMsgType.TEXT:
                 # 인증 전: 첫 메시지로 토큰 검증
                 if not authenticated:
@@ -1179,6 +1183,7 @@ async def handle_websocket(request):
                     try:
                         data = json.loads(msg.data)
                         msg_type = data.get("type", "")
+                        print(f"[WebSocket 수신] {user_id}: type={msg_type}, data={str(data)[:100]}")
 
                         if msg_type == "chat":
                             # 채팅 메시지 처리 - Claude CLI로 전송
