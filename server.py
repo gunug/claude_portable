@@ -1777,6 +1777,47 @@ class ConfigGUI:
                                       variable=self.sound_var)
         sound_check.pack(anchor=tk.W)
 
+        # 런타임 상태 프레임
+        runtime_frame = ttk.LabelFrame(main_frame, text="런타임 상태", padding=10)
+        runtime_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # 세션 ID
+        session_id_frame = ttk.Frame(runtime_frame)
+        session_id_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(session_id_frame, text="세션 ID:").pack(side=tk.LEFT)
+        self.runtime_session_label = tk.Label(session_id_frame, text="-", bg=self.bg_color, fg="#4ade80",
+                                              font=("Consolas", 9))
+        self.runtime_session_label.pack(side=tk.RIGHT)
+
+        # 요청 큐
+        queue_frame = ttk.Frame(runtime_frame)
+        queue_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(queue_frame, text="대기열:").pack(side=tk.LEFT)
+        self.runtime_queue_label = tk.Label(queue_frame, text="0개", bg=self.bg_color, fg="#fbbf24",
+                                            font=("Segoe UI", 9))
+        self.runtime_queue_label.pack(side=tk.RIGHT)
+
+        # 처리 상태
+        processing_frame = ttk.Frame(runtime_frame)
+        processing_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(processing_frame, text="처리 상태:").pack(side=tk.LEFT)
+        self.runtime_processing_label = tk.Label(processing_frame, text="대기 중", bg=self.bg_color, fg=self.fg_color,
+                                                 font=("Segoe UI", 9))
+        self.runtime_processing_label.pack(side=tk.RIGHT)
+
+        # 오늘 사용량
+        usage_frame = ttk.Frame(runtime_frame)
+        usage_frame.pack(fill=tk.X, pady=2)
+        ttk.Label(usage_frame, text="오늘 사용량:").pack(side=tk.LEFT)
+        self.runtime_usage_label = tk.Label(usage_frame, text="-", bg=self.bg_color, fg="#6366f1",
+                                            font=("Segoe UI", 9))
+        self.runtime_usage_label.pack(side=tk.RIGHT)
+
+        # 새로고침 버튼
+        refresh_runtime_btn = tk.Button(runtime_frame, text="상태 새로고침", command=self.refresh_runtime_status,
+                                       bg="#6366f1", fg="white")
+        refresh_runtime_btn.pack(anchor=tk.E, pady=(5, 0))
+
         # 상태 표시
         self.status_label = tk.Label(main_frame, text="서버 중지됨",
                                      font=("Segoe UI", 10),
@@ -1823,6 +1864,42 @@ class ConfigGUI:
         self.account_listbox.delete(0, tk.END)
         for account in config.get("accounts", []):
             self.account_listbox.insert(tk.END, account["id"])
+
+    def refresh_runtime_status(self):
+        """런타임 상태 새로고침"""
+        global claude_session_id, request_queue, claude_processing
+
+        # 세션 ID
+        if claude_session_id:
+            self.runtime_session_label.config(text=claude_session_id[:8] + "...")
+        else:
+            self.runtime_session_label.config(text="-")
+
+        # 요청 큐
+        queue_count = len(request_queue)
+        self.runtime_queue_label.config(text=f"{queue_count}개")
+        if queue_count > 0:
+            self.runtime_queue_label.config(fg="#ef4444")
+        else:
+            self.runtime_queue_label.config(fg="#4ade80")
+
+        # 처리 상태
+        if claude_processing:
+            self.runtime_processing_label.config(text="처리 중...", fg="#fbbf24")
+        else:
+            self.runtime_processing_label.config(text="대기 중", fg=self.fg_color)
+
+        # 사용량 조회 (비동기로 처리하면 좋지만 간단히 동기로)
+        try:
+            usage = get_claude_usage()
+            if usage and usage.get("today"):
+                today = usage["today"]
+                cost = today.get("totalCost", 0)
+                self.runtime_usage_label.config(text=f"${cost:.4f} (₩{int(cost * USD_TO_KRW):,})")
+            else:
+                self.runtime_usage_label.config(text="$0.00")
+        except Exception:
+            self.runtime_usage_label.config(text="조회 실패")
 
     def refresh_ip_list(self):
         """IP 내역 목록 새로고침"""
