@@ -706,8 +706,15 @@ async def send_usage_status(ws=None):
         print(f"[경고] 사용량 상태 조회 실패: {e}")
 
 
+queue_processor_running = False  # 큐 프로세서 실행 상태 (락 안에서만 변경)
+
+
 async def add_to_queue(message: str, sender: str):
     """요청을 큐에 추가"""
+    global queue_processor_running
+
+    should_start_processor = False
+
     async with queue_lock:
         request_queue.append({
             "sender": sender,
@@ -716,30 +723,44 @@ async def add_to_queue(message: str, sender: str):
         print(f"[큐] 요청 추가: {sender} (대기: {len(request_queue)}개)")
         await send_queue_status()
 
-    # 처리 시작 (처리 중이 아닐 때만)
-    if not claude_processing:
+        # 프로세서가 실행 중이 아니면 시작 필요
+        if not queue_processor_running:
+            queue_processor_running = True
+            should_start_processor = True
+
+    # 락 밖에서 태스크 생성 (락 안에서 결정된 플래그 기반)
+    if should_start_processor:
         asyncio.create_task(process_queue())
 
 
 async def process_queue():
     """큐에서 요청을 꺼내 순차 처리"""
-    global claude_processing
+    global claude_processing, queue_processor_running
 
-    while True:
+    try:
+        while True:
+            async with queue_lock:
+                if not request_queue:
+                    print("[큐] 모든 요청 처리 완료")
+                    return
+                request = request_queue[0]
+
+            await ask_claude(request["message"], request["sender"])
+
+            async with queue_lock:
+                if request_queue and request_queue[0] == request:
+                    request_queue.popleft()
+                    print(f"[큐] 요청 완료 (남은: {len(request_queue)}개)")
+                await send_queue_status()
+                await send_usage_status()
+    finally:
+        # 프로세서 종료 시 플래그 리셋 (락 안에서)
         async with queue_lock:
-            if not request_queue:
-                print("[큐] 모든 요청 처리 완료")
-                return
-            request = request_queue[0]
-
-        await ask_claude(request["message"], request["sender"])
-
-        async with queue_lock:
-            if request_queue and request_queue[0] == request:
-                request_queue.popleft()
-                print(f"[큐] 요청 완료 (남은: {len(request_queue)}개)")
-            await send_queue_status()
-            await send_usage_status()
+            queue_processor_running = False
+            # 종료 직전에 큐에 새 항목이 추가되었을 수 있으므로 재확인
+            if request_queue:
+                queue_processor_running = True
+                asyncio.create_task(process_queue())
 
 
 async def ask_claude(message: str, sender: str, retry_count: int = 0):
