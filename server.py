@@ -749,6 +749,11 @@ async def ask_claude(message: str, sender: str, retry_count: int = 0):
     MAX_RETRY = 1
     CLAUDE_TIMEOUT = config.get("claude_timeout", 300)
 
+    # 세션 ID가 없으면 새로 생성
+    if claude_session_id is None:
+        claude_session_id = str(uuid.uuid4())
+        claude_session_started = False
+
     claude_processing = True
     current_stop_event = threading.Event()
 
