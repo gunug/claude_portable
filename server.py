@@ -966,6 +966,38 @@ async def handle_index(request):
     return web.Response(text="index.html not found", status=404)
 
 
+async def handle_manifest(request):
+    """HTTP GET /manifest.json - PWA 매니페스트 제공"""
+    manifest_path = os.path.join(SCRIPT_DIR, "manifest.json")
+    if os.path.exists(manifest_path):
+        return web.FileResponse(manifest_path, headers={"Content-Type": "application/manifest+json"})
+    return web.Response(text="manifest.json not found", status=404)
+
+
+async def handle_service_worker(request):
+    """HTTP GET /service-worker.js - 서비스 워커 제공"""
+    sw_path = os.path.join(SCRIPT_DIR, "service-worker.js")
+    if os.path.exists(sw_path):
+        return web.FileResponse(sw_path, headers={"Content-Type": "application/javascript"})
+    return web.Response(text="service-worker.js not found", status=404)
+
+
+async def handle_icon(request):
+    """HTTP GET /icons/{filename} - PWA 아이콘 제공"""
+    filename = request.match_info.get("filename", "")
+    # 보안: 경로 탐색 공격 방지
+    if ".." in filename or "/" in filename or "\\" in filename:
+        return web.Response(text="Invalid filename", status=400)
+
+    icon_path = os.path.join(SCRIPT_DIR, "icons", filename)
+    if os.path.exists(icon_path):
+        content_type = "image/png"
+        if filename.endswith(".svg"):
+            content_type = "image/svg+xml"
+        return web.FileResponse(icon_path, headers={"Content-Type": content_type})
+    return web.Response(text="Icon not found", status=404)
+
+
 async def handle_login(request):
     """HTTP POST /login - 로그인 처리"""
     # 클라이언트 IP 가져오기
@@ -1272,6 +1304,10 @@ async def init_app():
     app.router.add_post("/login", handle_login)
     app.router.add_post("/logout", handle_logout)
     app.router.add_get("/ws", handle_websocket)
+    # PWA 관련 엔드포인트
+    app.router.add_get("/manifest.json", handle_manifest)
+    app.router.add_get("/service-worker.js", handle_service_worker)
+    app.router.add_get("/icons/{filename}", handle_icon)
     return app
 
 

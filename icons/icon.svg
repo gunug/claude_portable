@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#16213e"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#e94560"/>
+      <stop offset="100%" style="stop-color:#d63850"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 배경 -->
+  <rect width="512" height="512" rx="80" fill="url(#bg)"/>
+
+  <!-- 채팅 버블 -->
+  <path d="M120 140 h200 a40 40 0 0 1 40 40 v100 a40 40 0 0 1 -40 40 h-140 l-60 50 v-50 a40 40 0 0 1 -40 -40 v-100 a40 40 0 0 1 40 -40"
+        fill="url(#accent)" opacity="0.9"/>
+
+  <!-- Claude C 글자 -->
+  <text x="200" y="260"
+        font-family="Arial, sans-serif"
+        font-size="100"
+        font-weight="bold"
+        fill="white"
+        text-anchor="middle">C</text>
+
+  <!-- 작은 채팅 버블 (응답) -->
+  <path d="M230 300 h160 a30 30 0 0 1 30 30 v70 a30 30 0 0 1 -30 30 h-100 l-40 35 v-35 a30 30 0 0 1 -30 -30 v-70 a30 30 0 0 1 30 -30"
+        fill="#0f3460" opacity="0.9"/>
+
+  <!-- 점 3개 (타이핑 인디케이터) -->
+  <circle cx="280" cy="365" r="12" fill="#4ade80"/>
+  <circle cx="330" cy="365" r="12" fill="#4ade80" opacity="0.7"/>
+  <circle cx="380" cy="365" r="12" fill="#4ade80" opacity="0.4"/>
+</svg>

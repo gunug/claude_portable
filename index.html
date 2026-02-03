@@ -4,6 +4,32 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Claude Portable</title>
+
+    <!-- PWA 메타 태그 -->
+    <meta name="description" content="Claude AI와 실시간 채팅하는 웹 앱 (인증 지원)">
+    <meta name="theme-color" content="#6366f1">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="ClaudePortable">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="application-name" content="ClaudePortable">
+    <meta name="msapplication-TileColor" content="#0a0a0a">
+    <meta name="msapplication-TileImage" content="/icons/icon-144x144.png">
+
+    <!-- PWA 매니페스트 -->
+    <link rel="manifest" href="/manifest.json">
+
+    <!-- 파비콘 및 앱 아이콘 -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/icon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/icons/icon-16x16.png">
+    <link rel="apple-touch-icon" href="/icons/icon-192x192.png">
+    <link rel="apple-touch-icon" sizes="152x152" href="/icons/icon-152x152.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-192x192.png">
+    <link rel="apple-touch-icon" sizes="167x167" href="/icons/icon-192x192.png">
+
+    <!-- 스플래시 스크린 (iOS) -->
+    <link rel="apple-touch-startup-image" href="/icons/icon-512x512.png">
+
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
         * {
@@ -1476,6 +1502,45 @@
             if (isConnected) {
                 ws.send(JSON.stringify({ type: 'reset' }));
             }
+        });
+
+        // ============================================================
+        // PWA 서비스 워커 등록
+        // ============================================================
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/service-worker.js')
+                    .then((registration) => {
+                        console.log('[PWA] ServiceWorker 등록 성공:', registration.scope);
+
+                        // 업데이트 확인
+                        registration.addEventListener('updatefound', () => {
+                            const newWorker = registration.installing;
+                            newWorker.addEventListener('statechange', () => {
+                                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                    console.log('[PWA] 새 버전 사용 가능. 페이지를 새로고침하세요.');
+                                }
+                            });
+                        });
+                    })
+                    .catch((error) => {
+                        console.log('[PWA] ServiceWorker 등록 실패:', error);
+                    });
+            });
+        }
+
+        // PWA 설치 프롬프트 처리
+        let deferredPrompt;
+
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            console.log('[PWA] 앱 설치 가능');
+        });
+
+        window.addEventListener('appinstalled', () => {
+            console.log('[PWA] 앱이 설치되었습니다!');
+            deferredPrompt = null;
         });
     </script>
 </body>

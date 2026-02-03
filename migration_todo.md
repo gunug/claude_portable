@@ -100,21 +100,22 @@ chat_socket의 Claude Code CLI 연동 및 웹 UI를 claude_portable에 이식하
 
 ---
 
-## Phase 4: PWA 지원 (선택) ⏸️ 보류
+## Phase 4: PWA 지원 ✅ 완료
 
 ### 4.1 PWA 파일 추가
-- [ ] `manifest.json` 이식 (보류)
-- [ ] `service-worker.js` 이식 (보류)
-- [ ] `icons/` 폴더 이식 (보류)
+- [x] `manifest.json` 이식 ✅
+- [x] `service-worker.js` 이식 ✅
+- [x] `icons/` 폴더 이식 ✅
 
 ### 4.2 HTTP 핸들러 추가
-- [ ] `/manifest.json` 엔드포인트 (보류)
-- [ ] `/service-worker.js` 엔드포인트 (보류)
-- [ ] `/icons/*` 엔드포인트 (보류)
+- [x] `/manifest.json` 엔드포인트 ✅
+- [x] `/service-worker.js` 엔드포인트 ✅
+- [x] `/icons/*` 엔드포인트 ✅
 
 ### 4.3 HTML 메타 태그 추가
-- [ ] PWA 메타 태그 (보류)
-- [ ] 앱 아이콘 링크 (보류)
+- [x] PWA 메타 태그 ✅
+- [x] 앱 아이콘 링크 ✅
+- [x] 서비스 워커 등록 코드 ✅
 
 ---
 
