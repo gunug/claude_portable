@@ -1832,22 +1832,6 @@ class ConfigGUI:
                                 relief=tk.FLAT, padx=8, pady=3, cursor="hand2")
         view_log_btn.pack(side=tk.RIGHT)
 
-        # UI 설정 프레임
-        ui_frame = ttk.LabelFrame(main_frame, text="UI 설정", padding=10)
-        ui_frame.pack(fill=tk.X, pady=(0, 10))
-
-        # 자동 스크롤
-        self.auto_scroll_var = tk.BooleanVar(value=config["auto_scroll"])
-        auto_scroll_check = ttk.Checkbutton(ui_frame, text="자동 스크롤",
-                                            variable=self.auto_scroll_var)
-        auto_scroll_check.pack(anchor=tk.W)
-
-        # 알림 소리
-        self.sound_var = tk.BooleanVar(value=config["sound"])
-        sound_check = ttk.Checkbutton(ui_frame, text="알림 소리",
-                                      variable=self.sound_var)
-        sound_check.pack(anchor=tk.W)
-
         # 런타임 상태 프레임 - 특별 스타일
         runtime_frame = ttk.LabelFrame(main_frame, text="⚡ 런타임 상태", padding=10)
         runtime_frame.pack(fill=tk.X, pady=(0, 10))
@@ -1926,8 +1910,6 @@ class ConfigGUI:
         """설정을 GUI에 로드"""
         self.port_var.set(str(config["port"]))
         self.timeout_var.set(str(config["timeout"]))
-        self.auto_scroll_var.set(config["auto_scroll"])
-        self.sound_var.set(config["sound"])
         self.max_attempts_var.set(str(config.get("max_login_attempts", 5)))
         self.lockout_var.set(str(config.get("lockout_duration", 300)))
         self.max_unblock_var.set(str(config.get("max_auto_unblock", 3)))
@@ -2441,8 +2423,6 @@ class ConfigGUI:
 
             config["port"] = port
             config["timeout"] = timeout
-            config["auto_scroll"] = self.auto_scroll_var.get()
-            config["sound"] = self.sound_var.get()
             config["max_login_attempts"] = max_attempts
             config["lockout_duration"] = lockout_duration
             config["max_auto_unblock"] = max_auto_unblock

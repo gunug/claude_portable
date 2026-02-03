@@ -223,6 +223,111 @@
             border-color: #ef4444;
         }
 
+        /* 설정 버튼 */
+        .settings-btn {
+            background-color: #1a1a2e;
+            border-color: #6366f1;
+            color: #6366f1;
+        }
+
+        .settings-btn:hover {
+            background-color: #1a1a3e;
+        }
+
+        /* 설정 패널 */
+        .settings-panel {
+            display: none;
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background-color: #1a1a2e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 16px;
+            min-width: 220px;
+            z-index: 100;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            margin-top: 8px;
+        }
+
+        .settings-panel.show {
+            display: block;
+        }
+
+        .settings-panel h3 {
+            font-size: 14px;
+            color: #6366f1;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #333;
+        }
+
+        .settings-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 0;
+        }
+
+        .settings-item label {
+            font-size: 13px;
+            color: #ccc;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* 토글 스위치 */
+        .toggle-switch {
+            position: relative;
+            width: 44px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #333;
+            transition: 0.3s;
+            border-radius: 24px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: #888;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: #6366f1;
+        }
+
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(20px);
+            background-color: white;
+        }
+
+        .settings-wrapper {
+            position: relative;
+        }
+
         /* 사용량 UI */
         .usage-container {
             display: flex;
@@ -874,6 +979,26 @@
                     <span id="statusText">연결 중...</span>
                 </div>
                 <span id="currentUser" style="color: #aaa; font-size: 12px;"></span>
+                <div class="settings-wrapper">
+                    <button class="header-btn settings-btn" id="settingsBtn">⚙️ 설정</button>
+                    <div class="settings-panel" id="settingsPanel">
+                        <h3>⚙️ UI 설정</h3>
+                        <div class="settings-item">
+                            <label for="autoScrollToggle">📜 자동 스크롤</label>
+                            <div class="toggle-switch">
+                                <input type="checkbox" id="autoScrollToggle" checked>
+                                <span class="toggle-slider"></span>
+                            </div>
+                        </div>
+                        <div class="settings-item">
+                            <label for="soundToggle">🔔 알림 소리</label>
+                            <div class="toggle-switch">
+                                <input type="checkbox" id="soundToggle" checked>
+                                <span class="toggle-slider"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <button class="header-btn logout-btn" id="logoutBtn">로그아웃</button>
             </div>
         </div>
@@ -930,9 +1055,110 @@
         let authToken = null;
         let currentUserId = null;
         let isConnected = false;
-        let autoScroll = true;
         let currentProgress = null;
         let queueCollapsed = true;
+
+        // 설정 관련 DOM 요소
+        const settingsBtn = document.getElementById('settingsBtn');
+        const settingsPanel = document.getElementById('settingsPanel');
+        const autoScrollToggle = document.getElementById('autoScrollToggle');
+        const soundToggle = document.getElementById('soundToggle');
+
+        // ============================================================
+        // 설정 관리 (localStorage)
+        // ============================================================
+        const SETTINGS_KEY = 'claude_portable_settings';
+
+        // 기본 설정
+        const defaultSettings = {
+            autoScroll: true,
+            sound: true
+        };
+
+        // 설정 로드
+        function loadSettings() {
+            try {
+                const saved = localStorage.getItem(SETTINGS_KEY);
+                if (saved) {
+                    return { ...defaultSettings, ...JSON.parse(saved) };
+                }
+            } catch (e) {
+                console.error('설정 로드 실패:', e);
+            }
+            return { ...defaultSettings };
+        }
+
+        // 설정 저장
+        function saveSettings(settings) {
+            try {
+                localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+            } catch (e) {
+                console.error('설정 저장 실패:', e);
+            }
+        }
+
+        // 현재 설정
+        let settings = loadSettings();
+
+        // UI에 설정 반영
+        function applySettingsToUI() {
+            autoScrollToggle.checked = settings.autoScroll;
+            soundToggle.checked = settings.sound;
+        }
+
+        // 설정 초기화
+        applySettingsToUI();
+
+        // 설정 패널 토글
+        settingsBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            settingsPanel.classList.toggle('show');
+        });
+
+        // 패널 외부 클릭 시 닫기
+        document.addEventListener('click', (e) => {
+            if (!settingsPanel.contains(e.target) && e.target !== settingsBtn) {
+                settingsPanel.classList.remove('show');
+            }
+        });
+
+        // 자동 스크롤 토글
+        autoScrollToggle.addEventListener('change', () => {
+            settings.autoScroll = autoScrollToggle.checked;
+            saveSettings(settings);
+        });
+
+        // 알림 소리 토글
+        soundToggle.addEventListener('change', () => {
+            settings.sound = soundToggle.checked;
+            saveSettings(settings);
+        });
+
+        // 알림 소리 재생
+        function playNotificationSound() {
+            if (!settings.sound) return;
+
+            try {
+                // Web Audio API를 사용한 간단한 알림음
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+
+                oscillator.frequency.value = 800;
+                oscillator.type = 'sine';
+
+                gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3);
+
+                oscillator.start(audioContext.currentTime);
+                oscillator.stop(audioContext.currentTime + 0.3);
+            } catch (e) {
+                console.log('알림 소리 재생 실패:', e);
+            }
+        }
 
         // ============================================================
         // 로그인 처리
@@ -1098,6 +1324,8 @@
                 let msgType = 'other';
                 if (username === 'Claude') {
                     msgType = 'claude';
+                    // Claude 응답 시 알림 소리
+                    playNotificationSound();
                 } else if (username === currentUserId) {
                     msgType = 'user';
                 }
@@ -1309,6 +1537,9 @@
                 indicator.textContent = '✓';
             }
 
+            // 완료 알림 소리
+            playNotificationSound();
+
             currentProgress = null;
         }
 
@@ -1465,7 +1696,7 @@
         }
 
         function scrollToBottom() {
-            if (autoScroll) {
+            if (settings.autoScroll) {
                 requestAnimationFrame(() => {
                     chatArea.scrollTop = chatArea.scrollHeight;
                 });
