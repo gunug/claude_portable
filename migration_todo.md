@@ -100,21 +100,21 @@ chat_socket의 Claude Code CLI 연동 및 웹 UI를 claude_portable에 이식하
 
 ---
 
-## Phase 4: PWA 지원 (선택)
+## Phase 4: PWA 지원 (선택) ⏸️ 보류
 
 ### 4.1 PWA 파일 추가
-- [ ] `manifest.json` 이식
-- [ ] `service-worker.js` 이식
-- [ ] `icons/` 폴더 이식
+- [ ] `manifest.json` 이식 (보류)
+- [ ] `service-worker.js` 이식 (보류)
+- [ ] `icons/` 폴더 이식 (보류)
 
 ### 4.2 HTTP 핸들러 추가
-- [ ] `/manifest.json` 엔드포인트
-- [ ] `/service-worker.js` 엔드포인트
-- [ ] `/icons/*` 엔드포인트
+- [ ] `/manifest.json` 엔드포인트 (보류)
+- [ ] `/service-worker.js` 엔드포인트 (보류)
+- [ ] `/icons/*` 엔드포인트 (보류)
 
 ### 4.3 HTML 메타 태그 추가
-- [ ] PWA 메타 태그
-- [ ] 앱 아이콘 링크
+- [ ] PWA 메타 태그 (보류)
+- [ ] 앱 아이콘 링크 (보류)
 
 ---
 
@@ -128,13 +128,13 @@ chat_socket의 Claude Code CLI 연동 및 웹 UI를 claude_portable에 이식하
 - [x] Claude CLI 상태 확인 버튼 ✅
   - [x] CLI 설치 여부 확인
   - [x] CLI 버전 표시
-- [ ] 현재 세션 ID 표시 (CLI 연동 후)
-- [ ] 요청 큐 상태 표시 (CLI 연동 후)
-- [ ] 사용량 표시 (CLI 연동 후)
+- [ ] 현재 세션 ID 표시 (선택 - 보류)
+- [ ] 요청 큐 상태 표시 (선택 - 보류)
+- [ ] 사용량 표시 (선택 - 보류)
 
 ### 5.2 배치 파일 업데이트
-- [ ] `run.bat` 수정 (필요시)
-- [ ] ngrok 관련 스크립트 추가 (선택)
+- [x] `run.bat` 확인 ✅ (수정 불필요)
+- [ ] ngrok 관련 스크립트 추가 (선택 - 보류)
 
 ---
 
