@@ -1457,8 +1457,10 @@ class LogViewerDialog(tk.Toplevel):
         self.geometry("600x400")
         self.resizable(True, True)
 
-        # 다크 테마
-        self.configure(bg="#1a1a2e")
+        # 다크 테마 - 웹 UI와 동일한 색상
+        self.bg_root = "#0a0a0a"
+        self.bg_color = "#1a1a2e"
+        self.configure(bg=self.bg_root)
 
         # 모달 설정
         self.transient(parent)
@@ -1474,23 +1476,30 @@ class LogViewerDialog(tk.Toplevel):
         self.geometry(f"+{x}+{y}")
 
     def create_widgets(self):
-        bg = "#1a1a2e"
+        bg = self.bg_color
         fg = "#eeeeee"
 
         # 메인 프레임
-        frame = tk.Frame(self, bg=bg, padx=10, pady=10)
+        frame = tk.Frame(self, bg=self.bg_root, padx=15, pady=15)
         frame.pack(fill=tk.BOTH, expand=True)
 
+        # 제목
+        title_label = tk.Label(frame, text="📋 로그인 기록", font=("Segoe UI", 12, "bold"),
+                              bg=self.bg_root, fg="#6366f1")
+        title_label.pack(anchor=tk.W, pady=(0, 10))
+
         # 로그 텍스트
-        text_frame = tk.Frame(frame, bg=bg)
+        text_frame = tk.Frame(frame, bg=bg, padx=2, pady=2)
         text_frame.pack(fill=tk.BOTH, expand=True)
 
         scrollbar = tk.Scrollbar(text_frame)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        self.log_text = tk.Text(text_frame, bg="#0a0a0a", fg=fg,
+        self.log_text = tk.Text(text_frame, bg="#0d0d1a", fg=fg,
                                 yscrollcommand=scrollbar.set,
-                                font=("Consolas", 9), wrap=tk.NONE)
+                                font=("Consolas", 10), wrap=tk.NONE,
+                                highlightthickness=1, highlightbackground="#2a2a4e",
+                                highlightcolor="#6366f1", borderwidth=0)
         self.log_text.pack(fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.log_text.yview)
 
@@ -1502,19 +1511,22 @@ class LogViewerDialog(tk.Toplevel):
         self.log_text.tag_configure("expired", foreground="#a78bfa")
 
         # 버튼 프레임
-        btn_frame = tk.Frame(frame, bg=bg)
-        btn_frame.pack(fill=tk.X, pady=(10, 0))
+        btn_frame = tk.Frame(frame, bg=self.bg_root)
+        btn_frame.pack(fill=tk.X, pady=(12, 0))
 
-        refresh_btn = tk.Button(btn_frame, text="새로고침", command=self.load_logs,
-                               bg="#6366f1", fg="white")
+        refresh_btn = tk.Button(btn_frame, text="🔄 새로고침", command=self.load_logs,
+                               bg="#6366f1", fg="white", font=("Segoe UI", 9, "bold"),
+                               relief=tk.FLAT, padx=10, pady=4, cursor="hand2")
         refresh_btn.pack(side=tk.LEFT, padx=(0, 5))
 
-        clear_btn = tk.Button(btn_frame, text="로그 삭제", command=self.clear_logs,
-                             bg="#ef4444", fg="white")
+        clear_btn = tk.Button(btn_frame, text="🗑 로그 삭제", command=self.clear_logs,
+                             bg="#ef4444", fg="white", font=("Segoe UI", 9, "bold"),
+                             relief=tk.FLAT, padx=10, pady=4, cursor="hand2")
         clear_btn.pack(side=tk.LEFT)
 
         close_btn = tk.Button(btn_frame, text="닫기", command=self.destroy,
-                             bg="#666", fg="white")
+                             bg="#3a3a5a", fg="#a0a0a0", font=("Segoe UI", 9, "bold"),
+                             relief=tk.FLAT, padx=10, pady=4, cursor="hand2")
         close_btn.pack(side=tk.RIGHT)
 
     def load_logs(self):
@@ -1569,14 +1581,22 @@ class ConfigGUI:
         self.root = tk.Tk()
         self.root.title("Claude Portable")
         self.root.resizable(False, False)
-        self.root.minsize(400, 0)  # 최소 너비만 설정
+        self.root.minsize(420, 0)  # 최소 너비 조정
 
-        # 다크 테마 색상
-        self.bg_color = "#1a1a2e"
-        self.fg_color = "#eeeeee"
-        self.accent_color = "#6366f1"
+        # 웹 GUI와 동일한 다크 테마 색상
+        self.bg_root = "#0a0a0a"      # 웹 body 배경색
+        self.bg_color = "#1a1a2e"     # 카드/프레임 배경색
+        self.bg_input = "#0d0d1a"     # 입력 필드 배경
+        self.fg_color = "#eeeeee"     # 기본 텍스트
+        self.fg_secondary = "#a0a0a0"  # 보조 텍스트
+        self.accent_color = "#6366f1"  # 인디고 액센트
+        self.accent_purple = "#a855f7"  # 퍼플 액센트 (그라데이션 대체)
+        self.success_color = "#4ade80"  # 성공 (녹색)
+        self.warning_color = "#fbbf24"  # 경고 (주황)
+        self.danger_color = "#ef4444"   # 위험 (빨강)
+        self.border_color = "#2a2a4e"   # 테두리 색상
 
-        self.root.configure(bg=self.bg_color)
+        self.root.configure(bg=self.bg_root)
 
         self.server_thread = None
         self.log_viewer_dialog = None
@@ -1584,25 +1604,61 @@ class ConfigGUI:
         self.load_config_to_gui()
 
     def create_widgets(self):
-        # 스타일 설정
+        # 스타일 설정 - 웹 UI 디자인 반영
         style = ttk.Style()
         style.theme_use('clam')
-        style.configure("TLabel", background=self.bg_color, foreground=self.fg_color)
-        style.configure("TFrame", background=self.bg_color)
-        style.configure("TButton", padding=6)
-        style.configure("TCheckbutton", background=self.bg_color, foreground=self.fg_color)
-        style.configure("TLabelframe", background=self.bg_color, foreground=self.fg_color)
-        style.configure("TLabelframe.Label", background=self.bg_color, foreground=self.fg_color)
 
-        # 메인 프레임
+        # 기본 스타일
+        style.configure("TLabel", background=self.bg_color, foreground=self.fg_color,
+                       font=("Segoe UI", 10))
+        style.configure("TFrame", background=self.bg_color)
+
+        # 버튼 스타일 - 액센트 색상 적용
+        style.configure("TButton", padding=(12, 8), font=("Segoe UI", 10, "bold"),
+                       background=self.accent_color, foreground="white")
+        style.map("TButton",
+                 background=[("active", self.accent_purple), ("pressed", self.accent_purple)],
+                 foreground=[("active", "white"), ("pressed", "white")])
+
+        # 체크박스 스타일
+        style.configure("TCheckbutton", background=self.bg_color, foreground=self.fg_color,
+                       font=("Segoe UI", 10))
+        style.map("TCheckbutton",
+                 background=[("active", self.bg_color)],
+                 foreground=[("active", self.accent_color)])
+
+        # LabelFrame 스타일 - 카드 느낌
+        style.configure("TLabelframe", background=self.bg_color, foreground=self.fg_color,
+                       bordercolor=self.border_color, relief="solid", borderwidth=1)
+        style.configure("TLabelframe.Label", background=self.bg_color, foreground=self.accent_color,
+                       font=("Segoe UI", 10, "bold"))
+
+        # Entry 스타일
+        style.configure("TEntry", fieldbackground=self.bg_input, foreground=self.fg_color,
+                       insertcolor=self.fg_color, padding=5)
+        style.map("TEntry",
+                 fieldbackground=[("focus", "#1a1a2e")],
+                 bordercolor=[("focus", self.accent_color)])
+
+        # 메인 프레임 - 루트 배경색 사용
         main_frame = ttk.Frame(self.root, padding=20)
         main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.configure(style="Main.TFrame")
+        style.configure("Main.TFrame", background=self.bg_root)
 
-        # 제목
-        title_label = tk.Label(main_frame, text="Claude Portable",
-                               font=("Segoe UI", 16, "bold"),
-                               bg=self.bg_color, fg=self.accent_color)
-        title_label.pack(pady=(0, 15))
+        # 제목 - 그라데이션 효과 (두 색상 조합)
+        title_frame = tk.Frame(main_frame, bg=self.bg_root)
+        title_frame.pack(pady=(0, 15))
+
+        title_label = tk.Label(title_frame, text="Claude ",
+                               font=("Segoe UI", 18, "bold"),
+                               bg=self.bg_root, fg=self.accent_color)
+        title_label.pack(side=tk.LEFT)
+
+        title_label2 = tk.Label(title_frame, text="Portable",
+                                font=("Segoe UI", 18, "bold"),
+                                bg=self.bg_root, fg=self.accent_purple)
+        title_label2.pack(side=tk.LEFT)
 
         # 서버 설정 프레임
         server_frame = ttk.LabelFrame(main_frame, text="서버 설정", padding=10)
@@ -1632,19 +1688,23 @@ class ConfigGUI:
         account_header = ttk.Frame(account_frame)
         account_header.pack(fill=tk.X)
         ttk.Label(account_header, text="등록된 계정:").pack(side=tk.LEFT)
-        add_btn = tk.Button(account_header, text="+", command=self.add_account,
-                           width=3, bg="#4ade80", fg="white", font=("Segoe UI", 10, "bold"))
+        add_btn = tk.Button(account_header, text="＋ 추가", command=self.add_account,
+                           bg=self.success_color, fg="white", font=("Segoe UI", 9, "bold"),
+                           relief=tk.FLAT, padx=10, pady=3, cursor="hand2")
         add_btn.pack(side=tk.RIGHT)
 
-        # 계정 목록
-        self.account_listbox = tk.Listbox(account_frame, height=4, bg="#0a0a0a", fg=self.fg_color,
+        # 계정 목록 - 웹 UI 스타일
+        self.account_listbox = tk.Listbox(account_frame, height=4, bg=self.bg_input, fg=self.fg_color,
                                           selectbackground=self.accent_color, selectforeground="white",
-                                          borderwidth=1, relief=tk.SOLID)
-        self.account_listbox.pack(fill=tk.X, pady=(5, 5))
+                                          borderwidth=1, relief=tk.SOLID, highlightthickness=1,
+                                          highlightbackground=self.border_color, highlightcolor=self.accent_color,
+                                          font=("Segoe UI", 10))
+        self.account_listbox.pack(fill=tk.X, pady=(8, 8))
 
         # 계정 삭제 버튼
         delete_btn = tk.Button(account_frame, text="선택 삭제", command=self.delete_account,
-                              bg="#ef4444", fg="white")
+                              bg=self.danger_color, fg="white", font=("Segoe UI", 9, "bold"),
+                              relief=tk.FLAT, padx=10, pady=3, cursor="hand2")
         delete_btn.pack(anchor=tk.E)
 
         # 보안 설정 프레임
@@ -1697,68 +1757,79 @@ class ConfigGUI:
         self.claude_workdir_var = tk.StringVar(value=config.get("claude_working_dir", ""))
         workdir_entry = ttk.Entry(workdir_frame, textvariable=self.claude_workdir_var, width=20)
         workdir_entry.pack(side=tk.LEFT, padx=(5, 5), fill=tk.X, expand=True)
-        browse_btn = tk.Button(workdir_frame, text="찾기", command=self.browse_working_dir,
-                              bg="#6366f1", fg="white", width=5)
+        browse_btn = tk.Button(workdir_frame, text="📁 찾기", command=self.browse_working_dir,
+                              bg=self.accent_color, fg="white", font=("Segoe UI", 9, "bold"),
+                              relief=tk.FLAT, padx=8, pady=2, cursor="hand2")
         browse_btn.pack(side=tk.RIGHT)
 
         # 권한 스킵 옵션
         self.claude_skip_permissions_var = tk.BooleanVar(value=config.get("claude_skip_permissions", True))
         skip_perm_check = ttk.Checkbutton(claude_frame, text="권한 확인 스킵 (--dangerously-skip-permissions)",
                                           variable=self.claude_skip_permissions_var)
-        skip_perm_check.pack(anchor=tk.W, pady=(5, 5))
+        skip_perm_check.pack(anchor=tk.W, pady=(8, 8))
 
         # CLI 상태 확인 버튼
         cli_btn_frame = ttk.Frame(claude_frame)
         cli_btn_frame.pack(fill=tk.X, pady=(5, 0))
 
-        check_cli_btn = tk.Button(cli_btn_frame, text="상태 확인", command=self.check_claude_cli,
-                                 bg="#fbbf24", fg="black")
+        check_cli_btn = tk.Button(cli_btn_frame, text="🔍 상태 확인", command=self.check_claude_cli,
+                                 bg=self.warning_color, fg="black", font=("Segoe UI", 9, "bold"),
+                                 relief=tk.FLAT, padx=10, pady=4, cursor="hand2")
         check_cli_btn.pack(side=tk.LEFT, padx=(0, 5))
 
-        install_cli_btn = tk.Button(cli_btn_frame, text="CLI 설치", command=self.install_claude_cli,
-                                   bg="#4ade80", fg="white")
+        install_cli_btn = tk.Button(cli_btn_frame, text="📥 CLI 설치", command=self.install_claude_cli,
+                                   bg=self.success_color, fg="white", font=("Segoe UI", 9, "bold"),
+                                   relief=tk.FLAT, padx=10, pady=4, cursor="hand2")
         install_cli_btn.pack(side=tk.LEFT, padx=(0, 5))
 
-        auth_cli_btn = tk.Button(cli_btn_frame, text="CLI 인증", command=self.auth_claude_cli,
-                                bg="#6366f1", fg="white")
+        auth_cli_btn = tk.Button(cli_btn_frame, text="🔑 CLI 인증", command=self.auth_claude_cli,
+                                bg=self.accent_color, fg="white", font=("Segoe UI", 9, "bold"),
+                                relief=tk.FLAT, padx=10, pady=4, cursor="hand2")
         auth_cli_btn.pack(side=tk.LEFT, padx=(0, 5))
 
-        self.cli_status_label = tk.Label(cli_btn_frame, text="", bg=self.bg_color, fg=self.fg_color,
+        self.cli_status_label = tk.Label(cli_btn_frame, text="", bg=self.bg_color, fg=self.fg_secondary,
                                          font=("Segoe UI", 9))
-        self.cli_status_label.pack(side=tk.LEFT, fill=tk.X)
+        self.cli_status_label.pack(side=tk.LEFT, fill=tk.X, padx=(10, 0))
 
         # IP 내역 프레임
         ip_frame = ttk.LabelFrame(main_frame, text="IP 내역", padding=10)
         ip_frame.pack(fill=tk.X, pady=(0, 10))
 
-        # IP 목록 (성공/실패/차단 상태 포함)
-        self.ip_listbox = tk.Listbox(ip_frame, height=4, bg="#0a0a0a", fg=self.fg_color,
+        # IP 목록 (성공/실패/차단 상태 포함) - 웹 UI 스타일
+        self.ip_listbox = tk.Listbox(ip_frame, height=4, bg=self.bg_input, fg=self.fg_color,
                                      selectbackground=self.accent_color, selectforeground="white",
-                                     borderwidth=1, relief=tk.SOLID, font=("Consolas", 9))
-        self.ip_listbox.pack(fill=tk.X, pady=(0, 5))
+                                     borderwidth=1, relief=tk.SOLID, highlightthickness=1,
+                                     highlightbackground=self.border_color, highlightcolor=self.accent_color,
+                                     font=("Consolas", 10))
+        self.ip_listbox.pack(fill=tk.X, pady=(0, 8))
 
         # IP 버튼 프레임 (1행)
         ip_btn_frame1 = ttk.Frame(ip_frame)
         ip_btn_frame1.pack(fill=tk.X, pady=(0, 5))
 
-        refresh_ip_btn = tk.Button(ip_btn_frame1, text="새로고침", command=self.refresh_ip_list,
-                                   bg="#6366f1", fg="white")
+        refresh_ip_btn = tk.Button(ip_btn_frame1, text="🔄 새로고침", command=self.refresh_ip_list,
+                                   bg=self.accent_color, fg="white", font=("Segoe UI", 9, "bold"),
+                                   relief=tk.FLAT, padx=8, pady=3, cursor="hand2")
         refresh_ip_btn.pack(side=tk.LEFT, padx=(0, 5))
 
-        block_btn = tk.Button(ip_btn_frame1, text="수동 차단", command=self.manual_block_selected_ip,
-                             bg="#ef4444", fg="white")
+        block_btn = tk.Button(ip_btn_frame1, text="🚫 수동 차단", command=self.manual_block_selected_ip,
+                             bg=self.danger_color, fg="white", font=("Segoe UI", 9, "bold"),
+                             relief=tk.FLAT, padx=8, pady=3, cursor="hand2")
         block_btn.pack(side=tk.LEFT, padx=(0, 5))
 
-        unblock_btn = tk.Button(ip_btn_frame1, text="차단 해제", command=self.unblock_selected_ip,
-                               bg="#4ade80", fg="white")
+        unblock_btn = tk.Button(ip_btn_frame1, text="✓ 차단 해제", command=self.unblock_selected_ip,
+                               bg=self.success_color, fg="white", font=("Segoe UI", 9, "bold"),
+                               relief=tk.FLAT, padx=8, pady=3, cursor="hand2")
         unblock_btn.pack(side=tk.LEFT, padx=(0, 5))
 
-        delete_ip_btn = tk.Button(ip_btn_frame1, text="내역 삭제", command=self.delete_selected_ip_history,
-                                 bg="#666", fg="white")
+        delete_ip_btn = tk.Button(ip_btn_frame1, text="🗑 내역 삭제", command=self.delete_selected_ip_history,
+                                 bg="#3a3a5a", fg=self.fg_secondary, font=("Segoe UI", 9, "bold"),
+                                 relief=tk.FLAT, padx=8, pady=3, cursor="hand2")
         delete_ip_btn.pack(side=tk.LEFT, padx=(0, 5))
 
-        view_log_btn = tk.Button(ip_btn_frame1, text="로그 보기", command=self.view_login_log,
-                                bg="#fbbf24", fg="black")
+        view_log_btn = tk.Button(ip_btn_frame1, text="📋 로그 보기", command=self.view_login_log,
+                                bg=self.warning_color, fg="black", font=("Segoe UI", 9, "bold"),
+                                relief=tk.FLAT, padx=8, pady=3, cursor="hand2")
         view_log_btn.pack(side=tk.RIGHT)
 
         # UI 설정 프레임
@@ -1777,67 +1848,78 @@ class ConfigGUI:
                                       variable=self.sound_var)
         sound_check.pack(anchor=tk.W)
 
-        # 런타임 상태 프레임
-        runtime_frame = ttk.LabelFrame(main_frame, text="런타임 상태", padding=10)
+        # 런타임 상태 프레임 - 특별 스타일
+        runtime_frame = ttk.LabelFrame(main_frame, text="⚡ 런타임 상태", padding=10)
         runtime_frame.pack(fill=tk.X, pady=(0, 10))
 
         # 세션 ID
         session_id_frame = ttk.Frame(runtime_frame)
-        session_id_frame.pack(fill=tk.X, pady=2)
+        session_id_frame.pack(fill=tk.X, pady=3)
         ttk.Label(session_id_frame, text="세션 ID:").pack(side=tk.LEFT)
-        self.runtime_session_label = tk.Label(session_id_frame, text="-", bg=self.bg_color, fg="#4ade80",
-                                              font=("Consolas", 9))
+        self.runtime_session_label = tk.Label(session_id_frame, text="-", bg=self.bg_color, fg=self.success_color,
+                                              font=("Consolas", 10, "bold"))
         self.runtime_session_label.pack(side=tk.RIGHT)
 
         # 요청 큐
         queue_frame = ttk.Frame(runtime_frame)
-        queue_frame.pack(fill=tk.X, pady=2)
+        queue_frame.pack(fill=tk.X, pady=3)
         ttk.Label(queue_frame, text="대기열:").pack(side=tk.LEFT)
-        self.runtime_queue_label = tk.Label(queue_frame, text="0개", bg=self.bg_color, fg="#fbbf24",
-                                            font=("Segoe UI", 9))
+        self.runtime_queue_label = tk.Label(queue_frame, text="0개", bg=self.bg_color, fg=self.warning_color,
+                                            font=("Segoe UI", 10, "bold"))
         self.runtime_queue_label.pack(side=tk.RIGHT)
 
         # 처리 상태
         processing_frame = ttk.Frame(runtime_frame)
-        processing_frame.pack(fill=tk.X, pady=2)
+        processing_frame.pack(fill=tk.X, pady=3)
         ttk.Label(processing_frame, text="처리 상태:").pack(side=tk.LEFT)
-        self.runtime_processing_label = tk.Label(processing_frame, text="대기 중", bg=self.bg_color, fg=self.fg_color,
-                                                 font=("Segoe UI", 9))
+        self.runtime_processing_label = tk.Label(processing_frame, text="대기 중", bg=self.bg_color, fg=self.fg_secondary,
+                                                 font=("Segoe UI", 10))
         self.runtime_processing_label.pack(side=tk.RIGHT)
 
         # 오늘 사용량
         usage_frame = ttk.Frame(runtime_frame)
-        usage_frame.pack(fill=tk.X, pady=2)
+        usage_frame.pack(fill=tk.X, pady=3)
         ttk.Label(usage_frame, text="오늘 사용량:").pack(side=tk.LEFT)
-        self.runtime_usage_label = tk.Label(usage_frame, text="-", bg=self.bg_color, fg="#6366f1",
-                                            font=("Segoe UI", 9))
+        self.runtime_usage_label = tk.Label(usage_frame, text="-", bg=self.bg_color, fg=self.accent_purple,
+                                            font=("Segoe UI", 10, "bold"))
         self.runtime_usage_label.pack(side=tk.RIGHT)
 
         # 새로고침 버튼
-        refresh_runtime_btn = tk.Button(runtime_frame, text="상태 새로고침", command=self.refresh_runtime_status,
-                                       bg="#6366f1", fg="white")
-        refresh_runtime_btn.pack(anchor=tk.E, pady=(5, 0))
+        refresh_runtime_btn = tk.Button(runtime_frame, text="🔄 상태 새로고침", command=self.refresh_runtime_status,
+                                       bg=self.accent_color, fg="white", font=("Segoe UI", 9, "bold"),
+                                       relief=tk.FLAT, padx=10, pady=4, cursor="hand2")
+        refresh_runtime_btn.pack(anchor=tk.E, pady=(8, 0))
 
-        # 상태 표시
-        self.status_label = tk.Label(main_frame, text="서버 중지됨",
-                                     font=("Segoe UI", 10),
-                                     bg=self.bg_color, fg="#ef4444")
-        self.status_label.pack(pady=10)
+        # 상태 표시 - 더 눈에 띄게
+        status_container = tk.Frame(main_frame, bg=self.bg_root, padx=2, pady=2)
+        status_container.pack(fill=tk.X, pady=10)
+        self.status_label = tk.Label(status_container, text="● 서버 중지됨",
+                                     font=("Segoe UI", 11, "bold"),
+                                     bg=self.bg_root, fg=self.danger_color)
+        self.status_label.pack()
 
-        # 버튼 프레임
-        btn_frame = ttk.Frame(main_frame)
+        # 버튼 프레임 - 메인 액션 버튼들
+        btn_frame = tk.Frame(main_frame, bg=self.bg_root)
         btn_frame.pack(fill=tk.X, pady=(10, 0))
 
-        self.start_btn = ttk.Button(btn_frame, text="서버 시작", command=self.start_server)
-        self.start_btn.pack(side=tk.LEFT, padx=(0, 5))
+        self.start_btn = tk.Button(btn_frame, text="▶ 서버 시작", command=self.start_server,
+                                   bg=self.success_color, fg="white", font=("Segoe UI", 10, "bold"),
+                                   relief=tk.FLAT, padx=15, pady=8, cursor="hand2")
+        self.start_btn.pack(side=tk.LEFT, padx=(0, 8))
 
-        self.stop_btn = ttk.Button(btn_frame, text="서버 중지", command=self.stop_server, state=tk.DISABLED)
-        self.stop_btn.pack(side=tk.LEFT, padx=(0, 5))
+        self.stop_btn = tk.Button(btn_frame, text="⏹ 서버 중지", command=self.stop_server,
+                                  bg="#3a3a5a", fg=self.fg_secondary, font=("Segoe UI", 10, "bold"),
+                                  relief=tk.FLAT, padx=15, pady=8, state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.LEFT, padx=(0, 8))
 
-        self.client_btn = ttk.Button(btn_frame, text="클라이언트 실행", command=self.open_client, state=tk.DISABLED)
-        self.client_btn.pack(side=tk.LEFT, padx=(0, 5))
+        self.client_btn = tk.Button(btn_frame, text="🌐 클라이언트", command=self.open_client,
+                                    bg="#3a3a5a", fg=self.fg_secondary, font=("Segoe UI", 10, "bold"),
+                                    relief=tk.FLAT, padx=15, pady=8, state=tk.DISABLED)
+        self.client_btn.pack(side=tk.LEFT, padx=(0, 8))
 
-        save_btn = ttk.Button(btn_frame, text="설정 저장", command=self.save_config)
+        save_btn = tk.Button(btn_frame, text="💾 설정 저장", command=self.save_config,
+                            bg=self.accent_purple, fg="white", font=("Segoe UI", 10, "bold"),
+                            relief=tk.FLAT, padx=15, pady=8, cursor="hand2")
         save_btn.pack(side=tk.RIGHT)
 
     def load_config_to_gui(self):
@@ -1879,15 +1961,15 @@ class ConfigGUI:
         queue_count = len(request_queue)
         self.runtime_queue_label.config(text=f"{queue_count}개")
         if queue_count > 0:
-            self.runtime_queue_label.config(fg="#ef4444")
+            self.runtime_queue_label.config(fg=self.danger_color)
         else:
-            self.runtime_queue_label.config(fg="#4ade80")
+            self.runtime_queue_label.config(fg=self.success_color)
 
         # 처리 상태
         if claude_processing:
-            self.runtime_processing_label.config(text="처리 중...", fg="#fbbf24")
+            self.runtime_processing_label.config(text="● 처리 중...", fg=self.warning_color)
         else:
-            self.runtime_processing_label.config(text="대기 중", fg=self.fg_color)
+            self.runtime_processing_label.config(text="○ 대기 중", fg=self.fg_secondary)
 
         # 사용량 조회 (비동기로 처리하면 좋지만 간단히 동기로)
         try:
@@ -2383,10 +2465,11 @@ class ConfigGUI:
             self.server_thread = ServerThread(config["host"], port)
             self.server_thread.start()
 
-            self.status_label.config(text=f"서버 실행 중: http://localhost:{port}/", fg="#4ade80")
-            self.start_btn.config(state=tk.DISABLED)
-            self.stop_btn.config(state=tk.NORMAL)
-            self.client_btn.config(state=tk.NORMAL)
+            self.status_label.config(text=f"● 서버 실행 중: http://localhost:{port}/", fg=self.success_color)
+            # 버튼 상태 및 색상 업데이트
+            self.start_btn.config(state=tk.DISABLED, bg="#3a3a5a", fg=self.fg_secondary, cursor="")
+            self.stop_btn.config(state=tk.NORMAL, bg=self.danger_color, fg="white", cursor="hand2")
+            self.client_btn.config(state=tk.NORMAL, bg=self.accent_color, fg="white", cursor="hand2")
             self.port_entry.config(state=tk.DISABLED)
         except Exception as e:
             messagebox.showerror("오류", f"서버 시작 실패: {e}")
@@ -2397,10 +2480,11 @@ class ConfigGUI:
             self.server_thread.stop()
             self.server_thread = None
 
-        self.status_label.config(text="서버 중지됨", fg="#ef4444")
-        self.start_btn.config(state=tk.NORMAL)
-        self.stop_btn.config(state=tk.DISABLED)
-        self.client_btn.config(state=tk.DISABLED)
+        self.status_label.config(text="● 서버 중지됨", fg=self.danger_color)
+        # 버튼 상태 및 색상 업데이트
+        self.start_btn.config(state=tk.NORMAL, bg=self.success_color, fg="white", cursor="hand2")
+        self.stop_btn.config(state=tk.DISABLED, bg="#3a3a5a", fg=self.fg_secondary, cursor="")
+        self.client_btn.config(state=tk.DISABLED, bg="#3a3a5a", fg=self.fg_secondary, cursor="")
         self.port_entry.config(state=tk.NORMAL)
 
     def run(self):
