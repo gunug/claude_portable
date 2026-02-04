@@ -1965,6 +1965,12 @@ class ConfigGUI:
                               relief=tk.FLAT, padx=10, pady=3, cursor="hand2")
         delete_btn.pack(anchor=tk.E)
 
+        # 보안 주의사항
+        warning_label = ttk.Label(account_frame,
+                                  text="⚠ 주의: config.json에 저장되는 계정 정보는 고수준으로 보호되지 않습니다.\n이 소프트웨어 전용 아이디와 패스워드를 별도로 지정하세요.",
+                                  foreground="#FFA500", font=("Segoe UI", 9), wraplength=400)
+        warning_label.pack(fill=tk.X, pady=(10, 0))
+
         # ============================================================
         # 탭 3: 보안
         # ============================================================
@@ -2352,10 +2358,8 @@ class ConfigGUI:
             from datetime import datetime, timezone, timedelta
             kst = timezone(timedelta(hours=9))
 
-            blocks = get_claude_blocks()
-            if blocks and blocks.get("active_block"):
-                active = blocks["active_block"]
-
+            active = get_claude_blocks()  # 활성 블록 데이터 직접 반환
+            if active:
                 # 블록 시작 시간 (UTC -> KST)
                 start_str = active.get("startTime", "")
                 if start_str:
@@ -2375,10 +2379,9 @@ class ConfigGUI:
                     self.runtime_block_end_label.config(text="-")
 
                 # 남은 시간
-                projection = active.get("projection", {})
-                remaining_min = projection.get("remainingMinutes", 0)
+                remaining_min = active.get("remainingMinutes", 0)
                 if remaining_min:
-                    hours, mins = divmod(remaining_min, 60)
+                    hours, mins = divmod(int(remaining_min), 60)
                     self.runtime_block_remaining_label.config(text=f"{hours}시간 {mins}분")
                 else:
                     self.runtime_block_remaining_label.config(text="-")
