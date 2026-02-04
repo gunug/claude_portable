@@ -43,6 +43,37 @@
             height: -webkit-fill-available;
         }
 
+        /* 커스텀 스크롤바 */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #0a0a0a;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #333;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #6366f1;
+        }
+
+        ::-webkit-scrollbar-corner {
+            background: #0a0a0a;
+        }
+
+        /* Firefox 스크롤바 */
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: #333 #0a0a0a;
+        }
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background-color: #0a0a0a;
@@ -608,6 +639,62 @@
             color: #666;
             text-align: center;
             padding: 8px 0;
+        }
+
+        .queue-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .queue-clear-btn {
+            padding: 4px 10px;
+            background-color: #2a1a1a;
+            color: #ef4444;
+            border: 1px solid #ef4444;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .queue-clear-btn:hover {
+            background-color: #ef4444;
+            color: white;
+        }
+
+        .queue-item-delete {
+            width: 20px;
+            height: 20px;
+            background-color: transparent;
+            color: #666;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .queue-item-delete:hover {
+            background-color: #ef4444;
+            color: white;
+        }
+
+        .queue-item-processing {
+            background-color: #1a2a1a;
+            border-left: 2px solid #4ade80;
+            padding-left: 8px;
+            margin-left: -10px;
+        }
+
+        .queue-item-processing .queue-item-number {
+            background-color: #4ade80;
+            color: #000;
+            animation: pulse 1.5s ease-in-out infinite;
         }
 
         /* 채팅 영역 */
@@ -1192,7 +1279,10 @@
                     <span>📋 요청 대기열</span>
                     <span class="queue-count empty" id="queueCount">0</span>
                 </div>
-                <span class="queue-toggle" id="queueToggle">펼치기</span>
+                <div class="queue-actions">
+                    <button class="queue-clear-btn" id="queueClearAllBtn" title="전체 삭제 및 즉시 중단">🗑️ 전체 삭제</button>
+                    <span class="queue-toggle" id="queueToggle">펼치기</span>
+                </div>
             </div>
             <div class="queue-body collapsed" id="queueBody">
                 <div class="queue-empty">대기 중인 요청이 없습니다.</div>
@@ -1553,7 +1643,7 @@
             } else if (type === 'progress') {
                 handleProgress(data);
             } else if (type === 'queue_status') {
-                updateQueueStatus(data.count || 0, data.items || []);
+                updateQueueStatus(data.count || 0, data.items || [], data.processing || false);
             } else if (type === 'usage_status') {
                 updateUsageStatus(data);
             }
@@ -1793,38 +1883,93 @@
 
         let previousQueueCount = 0;  // 이전 큐 카운트 추적
 
-        function updateQueueStatus(count, items) {
+        let isProcessing = false;  // 현재 처리 중인지 여부
+
+        function updateQueueStatus(count, items, processing = false) {
+            isProcessing = processing;
+
             // 큐가 비었을 때 알림 (이전에 1개 이상이었다가 0개가 된 경우)
-            if (previousQueueCount > 0 && count === 0) {
+            if (previousQueueCount > 0 && count === 0 && !processing) {
                 playNotificationSound();
             }
             previousQueueCount = count;
 
-            queueCount.textContent = count;
-            if (count === 0) {
+            // 전체 개수 (처리 중 + 대기 중)
+            const totalCount = processing ? count + 1 : count;
+            queueCount.textContent = totalCount;
+            if (totalCount === 0) {
                 queueCount.classList.add('empty');
             } else {
                 queueCount.classList.remove('empty');
             }
 
+            let itemsHtml = '';
+
+            // 처리 중인 항목 (별도 표시)
+            if (processing && items && items.length > 0) {
+                const processingItem = items[0];
+                itemsHtml += `
+                    <div class="queue-item queue-item-processing">
+                        <div class="queue-item-number">⚡</div>
+                        <div class="queue-item-content">
+                            <div class="queue-item-sender">${escapeHtml(processingItem.sender)} (처리 중)</div>
+                            <div class="queue-item-message">${escapeHtml(processingItem.message)}</div>
+                        </div>
+                        <button class="queue-item-delete" onclick="deleteQueueItem(0)" title="즉시 중단">⏹</button>
+                    </div>
+                `;
+            }
+
+            // 대기 중인 항목들
             if (items && items.length > 0) {
-                let itemsHtml = '';
-                items.forEach((item, index) => {
+                const startIndex = processing ? 1 : 0;
+                items.slice(startIndex).forEach((item, index) => {
+                    const displayIndex = index + 1;
+                    const actualIndex = startIndex + index;  // 서버 큐에서의 실제 인덱스
                     itemsHtml += `
                         <div class="queue-item">
-                            <div class="queue-item-number">${index + 1}</div>
+                            <div class="queue-item-number">${displayIndex}</div>
                             <div class="queue-item-content">
                                 <div class="queue-item-sender">${escapeHtml(item.sender)}</div>
                                 <div class="queue-item-message">${escapeHtml(item.message)}</div>
                             </div>
+                            <button class="queue-item-delete" onclick="deleteQueueItem(${actualIndex})" title="삭제">✕</button>
                         </div>
                     `;
                 });
+            }
+
+            if (itemsHtml) {
                 queueBody.innerHTML = itemsHtml;
             } else {
                 queueBody.innerHTML = '<div class="queue-empty">대기 중인 요청이 없습니다.</div>';
             }
         }
+
+        // 큐 항목 삭제
+        function deleteQueueItem(index) {
+            if (!isConnected) return;
+            ws.send(JSON.stringify({
+                type: 'queue_delete',
+                index: index
+            }));
+        }
+
+        // 전체 삭제 및 즉시 중단
+        function clearAllQueue() {
+            if (!isConnected) return;
+            if (confirm('모든 요청을 삭제하고 진행 중인 작업을 중단하시겠습니까?')) {
+                ws.send(JSON.stringify({
+                    type: 'queue_clear_all'
+                }));
+            }
+        }
+
+        // 전체 삭제 버튼 이벤트
+        document.getElementById('queueClearAllBtn').addEventListener('click', (e) => {
+            e.stopPropagation();
+            clearAllQueue();
+        });
 
         // ============================================================
         // 사용량 상태

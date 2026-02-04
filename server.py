@@ -444,7 +444,7 @@ def get_claude_usage():
     """ccusage를 통해 오늘의 Claude 사용량 조회"""
     try:
         result = subprocess.run(
-            'npx ccusage@latest daily --json',
+            'npx -y ccusage@latest daily --json',
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -480,7 +480,7 @@ def get_claude_blocks():
     """ccusage를 통해 5시간 블록 사용량 조회"""
     try:
         result = subprocess.run(
-            'npx ccusage@latest blocks --json',
+            'npx -y ccusage@latest blocks --json',
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -653,10 +653,15 @@ async def send_queue_status(ws=None):
             "message": req["message"][:50] + ("..." if len(req["message"]) > 50 else "")
         })
 
+    # 처리 중이면 첫 번째 항목이 처리 중인 것
+    # 대기 중인 항목 수 = 전체 - (처리중 ? 1 : 0)
+    waiting_count = len(request_queue) - 1 if claude_processing and request_queue else len(request_queue)
+
     data = {
         "type": "queue_status",
-        "count": len(request_queue),
-        "items": items
+        "count": max(0, waiting_count),
+        "items": items,
+        "processing": claude_processing and len(request_queue) > 0
     }
 
     if ws:
@@ -674,14 +679,15 @@ async def send_queue_status(ws=None):
 async def send_usage_status(ws=None):
     """Claude 사용량 상태를 클라이언트에게 전송 (ws가 없으면 브로드캐스트)"""
     try:
-        loop = asyncio.get_event_loop()
+        print(f"[사용량] ccusage 조회 시작...")
+        loop = asyncio.get_running_loop()
         usage_task = loop.run_in_executor(None, get_claude_usage)
         blocks_task = loop.run_in_executor(None, get_claude_blocks)
 
         usage = await usage_task
+        print(f"[사용량] daily 조회 완료: {usage is not None}")
         blocks = await blocks_task
-
-        print(f"[사용량 조회] usage={usage is not None}, blocks={blocks is not None}")
+        print(f"[사용량] blocks 조회 완료: {blocks is not None}")
 
         combined_data = {}
         if usage:
@@ -710,9 +716,16 @@ async def send_usage_status(ws=None):
             # 모든 클라이언트에게 브로드캐스트
             await broadcast_to_authenticated(data)
     except Exception as e:
-        print(f"[경고] 사용량 상태 조회 실패: {e}")
+        print(f"[사용량 오류] {type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()
+        # 오류가 있어도 빈 데이터 전송 (클라이언트가 멈추지 않도록)
+        try:
+            data = {"type": "usage_status"}
+            if ws and not ws.closed:
+                await ws.send_str(json.dumps(data))
+        except:
+            pass
 
 
 queue_processor_running = False  # 큐 프로세서 실행 상태 (락 안에서만 변경)
@@ -741,6 +754,59 @@ async def add_to_queue(message: str, sender: str):
 
     if should_start_processor:
         asyncio.create_task(process_queue())
+
+
+async def stop_current_processing():
+    """현재 진행 중인 Claude 처리 즉시 중단"""
+    global current_stop_event, claude_processing
+
+    if current_stop_event and claude_processing:
+        print("[큐] 현재 처리 중단 요청")
+        current_stop_event.set()
+        await send_progress("error", {"message": "사용자에 의해 중단됨"})
+        return True
+    return False
+
+
+async def delete_queue_item(index: int):
+    """큐에서 특정 항목 삭제 (0: 진행 중인 항목 중단)"""
+    global current_stop_event, claude_processing, request_queue
+
+    if index == 0:
+        # 진행 중인 항목 중단
+        stopped = await stop_current_processing()
+        if stopped:
+            print(f"[큐] 진행 중인 요청 중단됨")
+        return stopped
+    else:
+        # 대기 중인 항목 삭제 (deque는 중간 삭제가 비효율적이므로 재구성)
+        async with queue_lock:
+            if 0 < index < len(request_queue):
+                # deque를 리스트로 변환 후 삭제하고 다시 deque로
+                queue_list = list(request_queue)
+                removed = queue_list.pop(index)
+                request_queue = deque(queue_list)
+                print(f"[큐] 요청 삭제: {removed['sender']} (남은: {len(request_queue)}개)")
+                asyncio.create_task(send_queue_status())
+                return True
+        return False
+
+
+async def clear_all_queue_and_stop():
+    """모든 대기열 삭제 및 현재 처리 중단"""
+    global current_stop_event, claude_processing
+
+    # 먼저 대기 중인 모든 항목 삭제
+    async with queue_lock:
+        count = len(request_queue)
+        request_queue.clear()
+        print(f"[큐] 대기열 전체 삭제 ({count}개)")
+
+    # 현재 처리 중인 항목도 중단
+    await stop_current_processing()
+
+    asyncio.create_task(send_queue_status())
+    return True
 
 
 async def process_queue():
@@ -1231,6 +1297,34 @@ async def handle_websocket(request):
                             print(f"[큐 상태 조회] {user_id}")
                             await send_queue_status(ws)
 
+                        elif msg_type == "queue_delete":
+                            # 큐 항목 삭제 (index: 0=진행중, 1+=대기중)
+                            index = data.get("index", -1)
+                            print(f"[큐 삭제] {user_id}: index={index}")
+                            success = await delete_queue_item(index)
+                            await ws.send_str(json.dumps({
+                                "type": "system",
+                                "message": "요청이 삭제되었습니다." if success else "삭제할 수 없습니다."
+                            }))
+
+                        elif msg_type == "queue_stop":
+                            # 현재 진행 중인 요청 중단
+                            print(f"[큐 중단] {user_id}")
+                            success = await stop_current_processing()
+                            await ws.send_str(json.dumps({
+                                "type": "system",
+                                "message": "진행 중인 요청이 중단되었습니다." if success else "진행 중인 요청이 없습니다."
+                            }))
+
+                        elif msg_type == "queue_clear_all":
+                            # 모든 대기열 삭제 및 즉시 중단
+                            print(f"[큐 전체 삭제] {user_id}")
+                            await clear_all_queue_and_stop()
+                            await broadcast_to_authenticated({
+                                "type": "system",
+                                "message": f"{user_id}님이 모든 요청을 삭제했습니다."
+                            })
+
                         else:
                             # 알 수 없는 메시지 타입
                             print(f"[알 수 없는 타입] {user_id}: {msg_type}")
@@ -1675,6 +1769,14 @@ class ConfigGUI:
                  fieldbackground=[("focus", "#1a1a2e")],
                  bordercolor=[("focus", self.accent_color)])
 
+        # Notebook (탭) 스타일
+        style.configure("TNotebook", background=self.bg_root, borderwidth=0)
+        style.configure("TNotebook.Tab", background=self.bg_color, foreground=self.fg_secondary,
+                       padding=(15, 8), font=("Segoe UI", 10, "bold"))
+        style.map("TNotebook.Tab",
+                 background=[("selected", self.accent_color), ("active", "#2a2a4e")],
+                 foreground=[("selected", "white"), ("active", self.fg_color)])
+
         # 메인 프레임 - 루트 배경색 사용
         main_frame = ttk.Frame(self.root, padding=20)
         main_frame.pack(fill=tk.BOTH, expand=True)
@@ -1695,8 +1797,30 @@ class ConfigGUI:
                                 bg=self.bg_root, fg=self.accent_purple)
         title_label2.pack(side=tk.LEFT)
 
+        # ============================================================
+        # 탭 컨테이너 (Notebook)
+        # ============================================================
+        notebook = ttk.Notebook(main_frame)
+        notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        # 탭 프레임 생성
+        tab_server = ttk.Frame(notebook, padding=10)
+        tab_account = ttk.Frame(notebook, padding=10)
+        tab_security = ttk.Frame(notebook, padding=10)
+        tab_claude = ttk.Frame(notebook, padding=10)
+        tab_ngrok = ttk.Frame(notebook, padding=10)
+
+        notebook.add(tab_server, text="서버")
+        notebook.add(tab_account, text="계정")
+        notebook.add(tab_security, text="보안")
+        notebook.add(tab_claude, text="Claude CLI")
+        notebook.add(tab_ngrok, text="ngrok")
+
+        # ============================================================
+        # 탭 1: 서버
+        # ============================================================
         # 서버 설정 프레임
-        server_frame = ttk.LabelFrame(main_frame, text="서버 설정", padding=10)
+        server_frame = ttk.LabelFrame(tab_server, text="서버 설정", padding=10)
         server_frame.pack(fill=tk.X, pady=(0, 10))
 
         # 포트
@@ -1715,8 +1839,107 @@ class ConfigGUI:
         self.timeout_entry = ttk.Entry(timeout_frame, textvariable=self.timeout_var, width=10)
         self.timeout_entry.pack(side=tk.RIGHT)
 
+        # 런타임 상태 프레임 (서버 탭에 포함)
+        runtime_frame = ttk.LabelFrame(tab_server, text="⚡ 런타임 상태", padding=10)
+        runtime_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # 세션 ID
+        session_id_frame = ttk.Frame(runtime_frame)
+        session_id_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(session_id_frame, text="세션 ID:").pack(side=tk.LEFT)
+        self.runtime_session_label = tk.Label(session_id_frame, text="-", bg=self.bg_color, fg=self.success_color,
+                                              font=("Consolas", 10, "bold"))
+        self.runtime_session_label.pack(side=tk.RIGHT)
+
+        # 요청 큐
+        queue_frame = ttk.Frame(runtime_frame)
+        queue_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(queue_frame, text="대기열:").pack(side=tk.LEFT)
+        self.runtime_queue_label = tk.Label(queue_frame, text="0개", bg=self.bg_color, fg=self.warning_color,
+                                            font=("Segoe UI", 10, "bold"))
+        self.runtime_queue_label.pack(side=tk.RIGHT)
+
+        # 처리 상태
+        processing_frame = ttk.Frame(runtime_frame)
+        processing_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(processing_frame, text="처리 상태:").pack(side=tk.LEFT)
+        self.runtime_processing_label = tk.Label(processing_frame, text="대기 중", bg=self.bg_color, fg=self.fg_secondary,
+                                                 font=("Segoe UI", 10))
+        self.runtime_processing_label.pack(side=tk.RIGHT)
+
+        # ── Daily 정보 ──
+        daily_separator = ttk.Separator(runtime_frame, orient="horizontal")
+        daily_separator.pack(fill=tk.X, pady=(8, 5))
+        daily_title = tk.Label(runtime_frame, text="📊 Daily", bg=self.bg_color, fg=self.accent_color,
+                               font=("Segoe UI", 9, "bold"))
+        daily_title.pack(anchor=tk.W)
+
+        # 오늘 사용량 (비용)
+        usage_frame = ttk.Frame(runtime_frame)
+        usage_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(usage_frame, text="오늘 비용:").pack(side=tk.LEFT)
+        self.runtime_usage_label = tk.Label(usage_frame, text="-", bg=self.bg_color, fg=self.accent_purple,
+                                            font=("Segoe UI", 10, "bold"))
+        self.runtime_usage_label.pack(side=tk.RIGHT)
+
+        # 오늘 토큰
+        daily_tokens_frame = ttk.Frame(runtime_frame)
+        daily_tokens_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(daily_tokens_frame, text="오늘 토큰:").pack(side=tk.LEFT)
+        self.runtime_daily_tokens_label = tk.Label(daily_tokens_frame, text="-", bg=self.bg_color, fg=self.fg_secondary,
+                                                    font=("Segoe UI", 10))
+        self.runtime_daily_tokens_label.pack(side=tk.RIGHT)
+
+        # ── Blocks 정보 ──
+        blocks_separator = ttk.Separator(runtime_frame, orient="horizontal")
+        blocks_separator.pack(fill=tk.X, pady=(8, 5))
+        blocks_title = tk.Label(runtime_frame, text="⏱ Blocks (5시간)", bg=self.bg_color, fg=self.accent_color,
+                                font=("Segoe UI", 9, "bold"))
+        blocks_title.pack(anchor=tk.W)
+
+        # 현재 블록 시작
+        block_start_frame = ttk.Frame(runtime_frame)
+        block_start_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(block_start_frame, text="블록 시작:").pack(side=tk.LEFT)
+        self.runtime_block_start_label = tk.Label(block_start_frame, text="-", bg=self.bg_color, fg=self.fg_secondary,
+                                                   font=("Segoe UI", 10))
+        self.runtime_block_start_label.pack(side=tk.RIGHT)
+
+        # 현재 블록 종료
+        block_end_frame = ttk.Frame(runtime_frame)
+        block_end_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(block_end_frame, text="블록 종료:").pack(side=tk.LEFT)
+        self.runtime_block_end_label = tk.Label(block_end_frame, text="-", bg=self.bg_color, fg=self.warning_color,
+                                                 font=("Segoe UI", 10))
+        self.runtime_block_end_label.pack(side=tk.RIGHT)
+
+        # 블록 남은 시간
+        block_remaining_frame = ttk.Frame(runtime_frame)
+        block_remaining_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(block_remaining_frame, text="남은 시간:").pack(side=tk.LEFT)
+        self.runtime_block_remaining_label = tk.Label(block_remaining_frame, text="-", bg=self.bg_color, fg=self.success_color,
+                                                       font=("Segoe UI", 10, "bold"))
+        self.runtime_block_remaining_label.pack(side=tk.RIGHT)
+
+        # 현재 블록 비용
+        block_cost_frame = ttk.Frame(runtime_frame)
+        block_cost_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(block_cost_frame, text="블록 비용:").pack(side=tk.LEFT)
+        self.runtime_block_cost_label = tk.Label(block_cost_frame, text="-", bg=self.bg_color, fg=self.accent_purple,
+                                                  font=("Segoe UI", 10))
+        self.runtime_block_cost_label.pack(side=tk.RIGHT)
+
+        # 새로고침 버튼
+        refresh_runtime_btn = tk.Button(runtime_frame, text="🔄 상태 새로고침", command=self.refresh_runtime_status,
+                                       bg=self.accent_color, fg="white", font=("Segoe UI", 9, "bold"),
+                                       relief=tk.FLAT, padx=10, pady=4, cursor="hand2")
+        refresh_runtime_btn.pack(anchor=tk.E, pady=(8, 0))
+
+        # ============================================================
+        # 탭 2: 계정
+        # ============================================================
         # 계정 설정 프레임
-        account_frame = ttk.LabelFrame(main_frame, text="계정 설정", padding=10)
+        account_frame = ttk.LabelFrame(tab_account, text="계정 설정", padding=10)
         account_frame.pack(fill=tk.X, pady=(0, 10))
 
         # 계정 목록 헤더
@@ -1742,8 +1965,11 @@ class ConfigGUI:
                               relief=tk.FLAT, padx=10, pady=3, cursor="hand2")
         delete_btn.pack(anchor=tk.E)
 
+        # ============================================================
+        # 탭 3: 보안
+        # ============================================================
         # 보안 설정 프레임
-        security_frame = ttk.LabelFrame(main_frame, text="보안 설정", padding=10)
+        security_frame = ttk.LabelFrame(tab_security, text="보안 설정", padding=10)
         security_frame.pack(fill=tk.X, pady=(0, 10))
 
         # 최대 로그인 시도
@@ -1774,8 +2000,52 @@ class ConfigGUI:
         self.session_timeout_var = tk.StringVar(value=str(config.get("session_timeout", 3600)))
         ttk.Entry(session_frame, textvariable=self.session_timeout_var, width=10).pack(side=tk.RIGHT)
 
+        # IP 내역 프레임 (보안 탭에 포함)
+        ip_frame = ttk.LabelFrame(tab_security, text="IP 내역", padding=10)
+        ip_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # IP 목록 (성공/실패/차단 상태 포함)
+        self.ip_listbox = tk.Listbox(ip_frame, height=4, bg=self.bg_input, fg=self.fg_color,
+                                     selectbackground=self.accent_color, selectforeground="white",
+                                     borderwidth=1, relief=tk.SOLID, highlightthickness=1,
+                                     highlightbackground=self.border_color, highlightcolor=self.accent_color,
+                                     font=("Consolas", 10))
+        self.ip_listbox.pack(fill=tk.X, pady=(0, 8))
+
+        # IP 버튼 프레임
+        ip_btn_frame1 = ttk.Frame(ip_frame)
+        ip_btn_frame1.pack(fill=tk.X, pady=(0, 5))
+
+        refresh_ip_btn = tk.Button(ip_btn_frame1, text="🔄 새로고침", command=self.refresh_ip_list,
+                                   bg=self.accent_color, fg="white", font=("Segoe UI", 9, "bold"),
+                                   relief=tk.FLAT, padx=8, pady=3, cursor="hand2")
+        refresh_ip_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        block_btn = tk.Button(ip_btn_frame1, text="🚫 수동 차단", command=self.manual_block_selected_ip,
+                             bg=self.danger_color, fg="white", font=("Segoe UI", 9, "bold"),
+                             relief=tk.FLAT, padx=8, pady=3, cursor="hand2")
+        block_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        unblock_btn = tk.Button(ip_btn_frame1, text="✓ 차단 해제", command=self.unblock_selected_ip,
+                               bg=self.success_color, fg="white", font=("Segoe UI", 9, "bold"),
+                               relief=tk.FLAT, padx=8, pady=3, cursor="hand2")
+        unblock_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        delete_ip_btn = tk.Button(ip_btn_frame1, text="🗑 내역 삭제", command=self.delete_selected_ip_history,
+                                 bg="#3a3a5a", fg=self.fg_secondary, font=("Segoe UI", 9, "bold"),
+                                 relief=tk.FLAT, padx=8, pady=3, cursor="hand2")
+        delete_ip_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        view_log_btn = tk.Button(ip_btn_frame1, text="📋 로그 보기", command=self.view_login_log,
+                                bg=self.warning_color, fg="black", font=("Segoe UI", 9, "bold"),
+                                relief=tk.FLAT, padx=8, pady=3, cursor="hand2")
+        view_log_btn.pack(side=tk.RIGHT)
+
+        # ============================================================
+        # 탭 4: Claude CLI
+        # ============================================================
         # Claude CLI 설정 프레임
-        claude_frame = ttk.LabelFrame(main_frame, text="Claude CLI 설정", padding=10)
+        claude_frame = ttk.LabelFrame(tab_claude, text="Claude CLI 설정", padding=10)
         claude_frame.pack(fill=tk.X, pady=(0, 10))
 
         # Claude 타임아웃
@@ -1826,89 +2096,162 @@ class ConfigGUI:
                                          font=("Segoe UI", 9))
         self.cli_status_label.pack(side=tk.LEFT, fill=tk.X, padx=(10, 0))
 
-        # IP 내역 프레임
-        ip_frame = ttk.LabelFrame(main_frame, text="IP 내역", padding=10)
-        ip_frame.pack(fill=tk.X, pady=(0, 10))
+        # ============================================================
+        # 탭 5: ngrok
+        # ============================================================
+        # winget 설치 프레임
+        winget_frame = ttk.LabelFrame(tab_ngrok, text="패키지 관리자 (winget)", padding=10)
+        winget_frame.pack(fill=tk.X, pady=(0, 10))
 
-        # IP 목록 (성공/실패/차단 상태 포함) - 웹 UI 스타일
-        self.ip_listbox = tk.Listbox(ip_frame, height=4, bg=self.bg_input, fg=self.fg_color,
-                                     selectbackground=self.accent_color, selectforeground="white",
-                                     borderwidth=1, relief=tk.SOLID, highlightthickness=1,
-                                     highlightbackground=self.border_color, highlightcolor=self.accent_color,
-                                     font=("Consolas", 10))
-        self.ip_listbox.pack(fill=tk.X, pady=(0, 8))
+        # winget 상태
+        winget_status_frame = ttk.Frame(winget_frame)
+        winget_status_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(winget_status_frame, text="winget 상태:").pack(side=tk.LEFT)
+        self.winget_status_label = tk.Label(winget_status_frame, text="확인 중...", bg=self.bg_color, fg=self.fg_secondary,
+                                             font=("Segoe UI", 10))
+        self.winget_status_label.pack(side=tk.RIGHT)
 
-        # IP 버튼 프레임 (1행)
-        ip_btn_frame1 = ttk.Frame(ip_frame)
-        ip_btn_frame1.pack(fill=tk.X, pady=(0, 5))
+        # winget 버튼
+        winget_btn_frame = ttk.Frame(winget_frame)
+        winget_btn_frame.pack(fill=tk.X, pady=(8, 0))
 
-        refresh_ip_btn = tk.Button(ip_btn_frame1, text="🔄 새로고침", command=self.refresh_ip_list,
-                                   bg=self.accent_color, fg="white", font=("Segoe UI", 9, "bold"),
-                                   relief=tk.FLAT, padx=8, pady=3, cursor="hand2")
-        refresh_ip_btn.pack(side=tk.LEFT, padx=(0, 5))
+        check_winget_btn = tk.Button(winget_btn_frame, text="🔍 상태 확인", command=self.check_winget_installed,
+                                     bg=self.warning_color, fg="black", font=("Segoe UI", 9, "bold"),
+                                     relief=tk.FLAT, padx=10, pady=4, cursor="hand2")
+        check_winget_btn.pack(side=tk.LEFT, padx=(0, 5))
 
-        block_btn = tk.Button(ip_btn_frame1, text="🚫 수동 차단", command=self.manual_block_selected_ip,
-                             bg=self.danger_color, fg="white", font=("Segoe UI", 9, "bold"),
-                             relief=tk.FLAT, padx=8, pady=3, cursor="hand2")
-        block_btn.pack(side=tk.LEFT, padx=(0, 5))
+        install_winget_btn = tk.Button(winget_btn_frame, text="📥 winget 설치", command=self.install_winget,
+                                       bg=self.success_color, fg="white", font=("Segoe UI", 9, "bold"),
+                                       relief=tk.FLAT, padx=10, pady=4, cursor="hand2")
+        install_winget_btn.pack(side=tk.LEFT, padx=(0, 5))
 
-        unblock_btn = tk.Button(ip_btn_frame1, text="✓ 차단 해제", command=self.unblock_selected_ip,
-                               bg=self.success_color, fg="white", font=("Segoe UI", 9, "bold"),
-                               relief=tk.FLAT, padx=8, pady=3, cursor="hand2")
-        unblock_btn.pack(side=tk.LEFT, padx=(0, 5))
+        # ngrok 설치 프레임
+        ngrok_install_frame = ttk.LabelFrame(tab_ngrok, text="ngrok 설치", padding=10)
+        ngrok_install_frame.pack(fill=tk.X, pady=(0, 10))
 
-        delete_ip_btn = tk.Button(ip_btn_frame1, text="🗑 내역 삭제", command=self.delete_selected_ip_history,
-                                 bg="#3a3a5a", fg=self.fg_secondary, font=("Segoe UI", 9, "bold"),
-                                 relief=tk.FLAT, padx=8, pady=3, cursor="hand2")
-        delete_ip_btn.pack(side=tk.LEFT, padx=(0, 5))
+        # 설치 상태
+        ngrok_status_frame = ttk.Frame(ngrok_install_frame)
+        ngrok_status_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(ngrok_status_frame, text="ngrok 상태:").pack(side=tk.LEFT)
+        self.ngrok_install_status_label = tk.Label(ngrok_status_frame, text="확인 중...", bg=self.bg_color, fg=self.fg_secondary,
+                                                    font=("Segoe UI", 10))
+        self.ngrok_install_status_label.pack(side=tk.RIGHT)
 
-        view_log_btn = tk.Button(ip_btn_frame1, text="📋 로그 보기", command=self.view_login_log,
-                                bg=self.warning_color, fg="black", font=("Segoe UI", 9, "bold"),
-                                relief=tk.FLAT, padx=8, pady=3, cursor="hand2")
-        view_log_btn.pack(side=tk.RIGHT)
+        # 버전 정보
+        ngrok_version_frame = ttk.Frame(ngrok_install_frame)
+        ngrok_version_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(ngrok_version_frame, text="설치 버전:").pack(side=tk.LEFT)
+        self.ngrok_version_label = tk.Label(ngrok_version_frame, text="-", bg=self.bg_color, fg=self.fg_secondary,
+                                             font=("Consolas", 10))
+        self.ngrok_version_label.pack(side=tk.RIGHT)
 
-        # 런타임 상태 프레임 - 특별 스타일
-        runtime_frame = ttk.LabelFrame(main_frame, text="⚡ 런타임 상태", padding=10)
-        runtime_frame.pack(fill=tk.X, pady=(0, 10))
+        # 설치/업그레이드 버튼
+        ngrok_install_btn_frame = ttk.Frame(ngrok_install_frame)
+        ngrok_install_btn_frame.pack(fill=tk.X, pady=(8, 0))
 
-        # 세션 ID
-        session_id_frame = ttk.Frame(runtime_frame)
-        session_id_frame.pack(fill=tk.X, pady=3)
-        ttk.Label(session_id_frame, text="세션 ID:").pack(side=tk.LEFT)
-        self.runtime_session_label = tk.Label(session_id_frame, text="-", bg=self.bg_color, fg=self.success_color,
-                                              font=("Consolas", 10, "bold"))
-        self.runtime_session_label.pack(side=tk.RIGHT)
+        check_ngrok_btn = tk.Button(ngrok_install_btn_frame, text="🔍 상태 확인", command=self.check_ngrok_installed,
+                                    bg=self.warning_color, fg="black", font=("Segoe UI", 9, "bold"),
+                                    relief=tk.FLAT, padx=10, pady=4, cursor="hand2")
+        check_ngrok_btn.pack(side=tk.LEFT, padx=(0, 5))
 
-        # 요청 큐
-        queue_frame = ttk.Frame(runtime_frame)
-        queue_frame.pack(fill=tk.X, pady=3)
-        ttk.Label(queue_frame, text="대기열:").pack(side=tk.LEFT)
-        self.runtime_queue_label = tk.Label(queue_frame, text="0개", bg=self.bg_color, fg=self.warning_color,
-                                            font=("Segoe UI", 10, "bold"))
-        self.runtime_queue_label.pack(side=tk.RIGHT)
+        install_ngrok_btn = tk.Button(ngrok_install_btn_frame, text="📥 ngrok 설치", command=self.install_ngrok,
+                                      bg=self.success_color, fg="white", font=("Segoe UI", 9, "bold"),
+                                      relief=tk.FLAT, padx=10, pady=4, cursor="hand2")
+        install_ngrok_btn.pack(side=tk.LEFT, padx=(0, 5))
 
-        # 처리 상태
-        processing_frame = ttk.Frame(runtime_frame)
-        processing_frame.pack(fill=tk.X, pady=3)
-        ttk.Label(processing_frame, text="처리 상태:").pack(side=tk.LEFT)
-        self.runtime_processing_label = tk.Label(processing_frame, text="대기 중", bg=self.bg_color, fg=self.fg_secondary,
+        upgrade_ngrok_btn = tk.Button(ngrok_install_btn_frame, text="⬆ 업그레이드", command=self.upgrade_ngrok,
+                                      bg=self.accent_color, fg="white", font=("Segoe UI", 9, "bold"),
+                                      relief=tk.FLAT, padx=10, pady=4, cursor="hand2")
+        upgrade_ngrok_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        # ngrok 인증 프레임
+        ngrok_auth_frame = ttk.LabelFrame(tab_ngrok, text="ngrok 인증", padding=10)
+        ngrok_auth_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # 인증 상태
+        ngrok_auth_status_frame = ttk.Frame(ngrok_auth_frame)
+        ngrok_auth_status_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(ngrok_auth_status_frame, text="인증 상태:").pack(side=tk.LEFT)
+        self.ngrok_auth_status_label = tk.Label(ngrok_auth_status_frame, text="-", bg=self.bg_color, fg=self.fg_secondary,
                                                  font=("Segoe UI", 10))
-        self.runtime_processing_label.pack(side=tk.RIGHT)
+        self.ngrok_auth_status_label.pack(side=tk.RIGHT)
 
-        # 오늘 사용량
-        usage_frame = ttk.Frame(runtime_frame)
-        usage_frame.pack(fill=tk.X, pady=3)
-        ttk.Label(usage_frame, text="오늘 사용량:").pack(side=tk.LEFT)
-        self.runtime_usage_label = tk.Label(usage_frame, text="-", bg=self.bg_color, fg=self.accent_purple,
-                                            font=("Segoe UI", 10, "bold"))
-        self.runtime_usage_label.pack(side=tk.RIGHT)
+        # 토큰 입력
+        ngrok_token_frame = ttk.Frame(ngrok_auth_frame)
+        ngrok_token_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(ngrok_token_frame, text="Auth Token:").pack(side=tk.LEFT)
+        self.ngrok_token_var = tk.StringVar()
+        self.ngrok_token_entry = ttk.Entry(ngrok_token_frame, textvariable=self.ngrok_token_var, width=35, show="*")
+        self.ngrok_token_entry.pack(side=tk.RIGHT)
 
-        # 새로고침 버튼
-        refresh_runtime_btn = tk.Button(runtime_frame, text="🔄 상태 새로고침", command=self.refresh_runtime_status,
+        # 인증 버튼
+        ngrok_auth_btn_frame = ttk.Frame(ngrok_auth_frame)
+        ngrok_auth_btn_frame.pack(fill=tk.X, pady=(8, 0))
+
+        register_token_btn = tk.Button(ngrok_auth_btn_frame, text="🔑 토큰 등록", command=self.register_ngrok_token,
                                        bg=self.accent_color, fg="white", font=("Segoe UI", 9, "bold"),
                                        relief=tk.FLAT, padx=10, pady=4, cursor="hand2")
-        refresh_runtime_btn.pack(anchor=tk.E, pady=(8, 0))
+        register_token_btn.pack(side=tk.LEFT, padx=(0, 5))
 
+        delete_token_btn = tk.Button(ngrok_auth_btn_frame, text="🗑 토큰 삭제", command=self.delete_ngrok_token,
+                                     bg=self.danger_color, fg="white", font=("Segoe UI", 9, "bold"),
+                                     relief=tk.FLAT, padx=10, pady=4, cursor="hand2")
+        delete_token_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        # ngrok 도메인 (유료) 프레임
+        ngrok_domain_frame = ttk.LabelFrame(tab_ngrok, text="ngrok 도메인 (유료)", padding=10)
+        ngrok_domain_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # 도메인 입력
+        domain_input_frame = ttk.Frame(ngrok_domain_frame)
+        domain_input_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(domain_input_frame, text="도메인:").pack(side=tk.LEFT)
+        self.ngrok_domain_var = tk.StringVar(value=config.get("ngrok_domain", ""))
+        self.ngrok_domain_entry = ttk.Entry(domain_input_frame, textvariable=self.ngrok_domain_var, width=30)
+        self.ngrok_domain_entry.pack(side=tk.RIGHT)
+
+        # 도메인 설명
+        domain_hint = tk.Label(ngrok_domain_frame, text="예: myapp.ngrok.io (유료 플랜 필요)",
+                               bg=self.bg_color, fg=self.fg_secondary, font=("Segoe UI", 9))
+        domain_hint.pack(anchor=tk.W, pady=(3, 0))
+
+        # ngrok 실행 테스트 프레임
+        ngrok_test_frame = ttk.LabelFrame(tab_ngrok, text="ngrok 실행 테스트", padding=10)
+        ngrok_test_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # 테스트 상태
+        ngrok_test_status_frame = ttk.Frame(ngrok_test_frame)
+        ngrok_test_status_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(ngrok_test_status_frame, text="테스트 결과:").pack(side=tk.LEFT)
+        self.ngrok_test_status_label = tk.Label(ngrok_test_status_frame, text="-", bg=self.bg_color, fg=self.fg_secondary,
+                                                 font=("Segoe UI", 10))
+        self.ngrok_test_status_label.pack(side=tk.RIGHT)
+
+        # 테스트 URL
+        ngrok_url_frame = ttk.Frame(ngrok_test_frame)
+        ngrok_url_frame.pack(fill=tk.X, pady=3)
+        ttk.Label(ngrok_url_frame, text="URL:").pack(side=tk.LEFT)
+        self.ngrok_url_label = tk.Label(ngrok_url_frame, text="-", bg=self.bg_color, fg=self.accent_color,
+                                         font=("Consolas", 10), cursor="hand2")
+        self.ngrok_url_label.pack(side=tk.RIGHT)
+
+        # 테스트 버튼
+        ngrok_test_btn_frame = ttk.Frame(ngrok_test_frame)
+        ngrok_test_btn_frame.pack(fill=tk.X, pady=(8, 0))
+
+        test_ngrok_btn = tk.Button(ngrok_test_btn_frame, text="▶ 테스트 실행", command=self.test_ngrok,
+                                   bg=self.success_color, fg="white", font=("Segoe UI", 9, "bold"),
+                                   relief=tk.FLAT, padx=10, pady=4, cursor="hand2")
+        test_ngrok_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        stop_ngrok_btn = tk.Button(ngrok_test_btn_frame, text="⏹ 테스트 중지", command=self.stop_ngrok_test,
+                                   bg="#3a3a5a", fg=self.fg_secondary, font=("Segoe UI", 9, "bold"),
+                                   relief=tk.FLAT, padx=10, pady=4, cursor="hand2")
+        stop_ngrok_btn.pack(side=tk.LEFT, padx=(0, 5))
+
+        # ============================================================
+        # 공통 영역 (탭 외부)
+        # ============================================================
         # 상태 표시 - 더 눈에 띄게
         status_container = tk.Frame(main_frame, bg=self.bg_root, padx=2, pady=2)
         status_container.pack(fill=tk.X, pady=10)
@@ -1988,17 +2331,71 @@ class ConfigGUI:
         else:
             self.runtime_processing_label.config(text="○ 대기 중", fg=self.fg_secondary)
 
-        # 사용량 조회 (비동기로 처리하면 좋지만 간단히 동기로)
+        # Daily 정보 조회
         try:
             usage = get_claude_usage()
             if usage and usage.get("today"):
                 today = usage["today"]
                 cost = today.get("totalCost", 0)
+                tokens = today.get("totalTokens", 0)
                 self.runtime_usage_label.config(text=f"${cost:.4f} (₩{int(cost * USD_TO_KRW):,})")
+                self.runtime_daily_tokens_label.config(text=f"{tokens:,}")
             else:
                 self.runtime_usage_label.config(text="$0.00")
+                self.runtime_daily_tokens_label.config(text="0")
         except Exception:
             self.runtime_usage_label.config(text="조회 실패")
+            self.runtime_daily_tokens_label.config(text="-")
+
+        # Blocks 정보 조회
+        try:
+            from datetime import datetime, timezone, timedelta
+            kst = timezone(timedelta(hours=9))
+
+            blocks = get_claude_blocks()
+            if blocks and blocks.get("active_block"):
+                active = blocks["active_block"]
+
+                # 블록 시작 시간 (UTC -> KST)
+                start_str = active.get("startTime", "")
+                if start_str:
+                    start_utc = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+                    start_kst = start_utc.astimezone(kst)
+                    self.runtime_block_start_label.config(text=start_kst.strftime("%Y-%m-%d %H:%M:%S"))
+                else:
+                    self.runtime_block_start_label.config(text="-")
+
+                # 블록 종료 시간 (UTC -> KST)
+                end_str = active.get("endTime", "")
+                if end_str:
+                    end_utc = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+                    end_kst = end_utc.astimezone(kst)
+                    self.runtime_block_end_label.config(text=end_kst.strftime("%Y-%m-%d %H:%M:%S"))
+                else:
+                    self.runtime_block_end_label.config(text="-")
+
+                # 남은 시간
+                projection = active.get("projection", {})
+                remaining_min = projection.get("remainingMinutes", 0)
+                if remaining_min:
+                    hours, mins = divmod(remaining_min, 60)
+                    self.runtime_block_remaining_label.config(text=f"{hours}시간 {mins}분")
+                else:
+                    self.runtime_block_remaining_label.config(text="-")
+
+                # 블록 비용
+                block_cost = active.get("costUSD", 0)
+                self.runtime_block_cost_label.config(text=f"${block_cost:.4f} (₩{int(block_cost * USD_TO_KRW):,})")
+            else:
+                self.runtime_block_start_label.config(text="활성 블록 없음")
+                self.runtime_block_end_label.config(text="-")
+                self.runtime_block_remaining_label.config(text="-")
+                self.runtime_block_cost_label.config(text="-")
+        except Exception as e:
+            self.runtime_block_start_label.config(text="조회 실패")
+            self.runtime_block_end_label.config(text="-")
+            self.runtime_block_remaining_label.config(text="-")
+            self.runtime_block_cost_label.config(text="-")
 
     def refresh_ip_list(self):
         """IP 내역 목록 새로고침"""
@@ -2502,10 +2899,583 @@ class ConfigGUI:
         self.client_btn.config(state=tk.DISABLED, bg="#3a3a5a", fg=self.fg_secondary, cursor="")
         self.port_entry.config(state=tk.NORMAL)
 
+    # ============================================================
+    # winget 관련 메서드
+    # ============================================================
+    def get_winget_path(self):
+        """winget 실행 파일 경로 찾기"""
+        # 1. PATH에서 찾기
+        try:
+            result = subprocess.run(
+                ["where", "winget"],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=5
+            )
+            if result.returncode == 0:
+                return result.stdout.strip().split('\n')[0]
+        except:
+            pass
+
+        # 2. 기본 설치 경로 확인
+        possible_paths = [
+            os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Microsoft', 'WindowsApps', 'winget.exe'),
+            os.path.join(os.environ.get('PROGRAMFILES', ''), 'WindowsApps', 'Microsoft.DesktopAppInstaller_*', 'winget.exe'),
+        ]
+
+        for path in possible_paths:
+            if '*' in path:
+                import glob
+                matches = glob.glob(path)
+                if matches:
+                    return matches[0]
+            elif os.path.exists(path):
+                return path
+
+        return None
+
+    def check_winget_installed(self):
+        """winget 설치 여부 확인"""
+        winget_path = self.get_winget_path()
+
+        if winget_path:
+            try:
+                result = subprocess.run(
+                    [winget_path, "--version"],
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    timeout=10
+                )
+                if result.returncode == 0:
+                    version = result.stdout.strip()
+                    self.winget_status_label.config(text=f"✓ {version}", fg=self.success_color)
+                    return winget_path
+            except:
+                pass
+
+        self.winget_status_label.config(text="✗ 설치되지 않음", fg=self.danger_color)
+        return None
+
+    def install_winget(self):
+        """winget 설치 (PowerShell 명령어)"""
+        # 먼저 설치 여부 확인
+        try:
+            result = subprocess.run(["winget", "--version"], capture_output=True, timeout=5)
+            if result.returncode == 0:
+                messagebox.showinfo("알림", "winget이 이미 설치되어 있습니다.")
+                self.check_winget_installed()
+                return
+        except:
+            pass
+
+        if not messagebox.askyesno("winget 설치", "winget을 자동으로 설치하시겠습니까?\n\n관리자 권한이 필요할 수 있습니다."):
+            return
+
+        self.winget_status_label.config(text="설치 중...", fg=self.warning_color)
+        self.root.update()
+
+        try:
+            # PowerShell 스크립트로 winget 설치
+            ps_script = '''
+$ProgressPreference = 'SilentlyContinue'
+$tempDir = $env:TEMP
+$bundlePath = Join-Path $tempDir "Microsoft.DesktopAppInstaller.msixbundle"
+$licensePath = Join-Path $tempDir "License.xml"
+$vcLibsPath = Join-Path $tempDir "Microsoft.VCLibs.x64.appx"
+$uiXamlPath = Join-Path $tempDir "Microsoft.UI.Xaml.appx"
+
+# GitHub API에서 최신 릴리스 정보 가져오기
+$release = Invoke-RestMethod -Uri "https://api.github.com/repos/microsoft/winget-cli/releases/latest"
+$bundleUrl = ($release.assets | Where-Object { $_.name -match "Microsoft.DesktopAppInstaller.*\\.msixbundle$" }).browser_download_url
+$licenseUrl = ($release.assets | Where-Object { $_.name -match "License.*\\.xml$" }).browser_download_url
+
+if (-not $bundleUrl) {
+    throw "msixbundle URL not found"
+}
+
+# 의존성 패키지 다운로드 (VCLibs)
+Write-Host "Downloading VCLibs..."
+Invoke-WebRequest -Uri "https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx" -OutFile $vcLibsPath
+
+# 의존성 패키지 다운로드 (UI.Xaml)
+Write-Host "Downloading UI.Xaml..."
+$uiXamlUrl = "https://www.nuget.org/api/v2/package/Microsoft.UI.Xaml/2.8.6"
+$uiXamlZip = Join-Path $tempDir "uixaml.zip"
+Invoke-WebRequest -Uri $uiXamlUrl -OutFile $uiXamlZip
+Expand-Archive -Path $uiXamlZip -DestinationPath (Join-Path $tempDir "uixaml") -Force
+$uiXamlAppx = Get-ChildItem -Path (Join-Path $tempDir "uixaml\\tools\\AppX\\x64\\Release") -Filter "*.appx" | Select-Object -First 1
+if ($uiXamlAppx) { Copy-Item $uiXamlAppx.FullName $uiXamlPath -Force }
+
+# winget 다운로드
+Write-Host "Downloading winget..."
+Invoke-WebRequest -Uri $bundleUrl -OutFile $bundlePath
+
+# 의존성 설치
+Write-Host "Installing dependencies..."
+if (Test-Path $vcLibsPath) { Add-AppxPackage -Path $vcLibsPath -ErrorAction SilentlyContinue }
+if (Test-Path $uiXamlPath) { Add-AppxPackage -Path $uiXamlPath -ErrorAction SilentlyContinue }
+
+# winget 설치
+Write-Host "Installing winget..."
+Add-AppxPackage -Path $bundlePath -ForceApplicationShutdown
+
+# 정리
+Remove-Item $bundlePath -Force -ErrorAction SilentlyContinue
+Remove-Item $licensePath -Force -ErrorAction SilentlyContinue
+Remove-Item $vcLibsPath -Force -ErrorAction SilentlyContinue
+Remove-Item $uiXamlPath -Force -ErrorAction SilentlyContinue
+Remove-Item $uiXamlZip -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $tempDir "uixaml") -Recurse -Force -ErrorAction SilentlyContinue
+
+Write-Host "Installation complete!"
+'''
+            result = subprocess.run(
+                ["powershell", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=300
+            )
+
+            if result.returncode == 0:
+                self.winget_status_label.config(text="✓ 설치 완료", fg=self.success_color)
+                messagebox.showinfo("설치 완료", "winget이 설치되었습니다.\n\n새 터미널에서 사용 가능합니다.\nClaude Portable을 재시작합니다.")
+                self.restart_app()
+            else:
+                error_msg = result.stderr[:500] if result.stderr else "알 수 없는 오류"
+                self.winget_status_label.config(text="✗ 설치 실패", fg=self.danger_color)
+                messagebox.showerror("설치 실패", f"winget 설치 실패:\n{error_msg}")
+
+        except subprocess.TimeoutExpired:
+            self.winget_status_label.config(text="✗ 시간 초과", fg=self.danger_color)
+            messagebox.showerror("오류", "설치 시간이 초과되었습니다.")
+        except Exception as e:
+            self.winget_status_label.config(text="✗ 오류", fg=self.danger_color)
+            messagebox.showerror("오류", f"설치 중 오류 발생:\n{e}")
+
+        self.winget_status_label.config(text="설치 대기 중...", fg=self.warning_color)
+
+    # ============================================================
+    # ngrok 관련 메서드
+    # ============================================================
+    def check_ngrok_installed(self):
+        """ngrok 설치 여부 확인"""
+        try:
+            result = subprocess.run(
+                ["ngrok", "version"],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=10
+            )
+            if result.returncode == 0:
+                version_str = result.stdout.strip()
+                self.ngrok_install_status_label.config(text="✓ 설치됨", fg=self.success_color)
+                self.ngrok_version_label.config(text=version_str, fg=self.accent_color)
+
+                # 버전 번호 추출 (예: "ngrok version 3.5.0")
+                import re
+                match = re.search(r'(\d+)\.(\d+)\.(\d+)', version_str)
+                if match:
+                    major = int(match.group(1))
+                    if major < 3:
+                        self.ngrok_version_label.config(fg=self.warning_color)
+                        print(f"[ngrok] 경고: 버전 {major}.x 설치됨 - 업그레이드 권장")
+
+                # 인증 상태도 확인
+                self.check_ngrok_auth()
+            else:
+                self.ngrok_install_status_label.config(text="✗ 설치되지 않음", fg=self.danger_color)
+                self.ngrok_version_label.config(text="-", fg=self.fg_secondary)
+        except FileNotFoundError:
+            self.ngrok_install_status_label.config(text="✗ 설치되지 않음", fg=self.danger_color)
+            self.ngrok_version_label.config(text="-", fg=self.fg_secondary)
+        except Exception as e:
+            self.ngrok_install_status_label.config(text=f"오류: {e}", fg=self.danger_color)
+            self.ngrok_version_label.config(text="-", fg=self.fg_secondary)
+
+    def upgrade_ngrok(self):
+        """ngrok 업그레이드"""
+        # winget 경로 확인
+        winget_path = self.get_winget_path()
+
+        if not winget_path:
+            messagebox.showerror("업그레이드 실패", "winget이 설치되어 있지 않습니다.\n먼저 winget을 설치해주세요.")
+            return
+
+        if not messagebox.askyesno("ngrok 업그레이드", "ngrok을 최신 버전으로 업그레이드하시겠습니까?"):
+            return
+
+        try:
+            self.ngrok_install_status_label.config(text="업그레이드 중...", fg=self.warning_color)
+            self.root.update()
+
+            print("[ngrok] 업그레이드 시작...")
+
+            result = subprocess.run(
+                [winget_path, "upgrade", "ngrok.ngrok", "--accept-source-agreements", "--accept-package-agreements"],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=120
+            )
+
+            print(f"[ngrok] 업그레이드 결과: returncode={result.returncode}")
+            if result.stdout:
+                print(f"[ngrok] stdout: {result.stdout[:500]}")
+            if result.stderr:
+                print(f"[ngrok] stderr: {result.stderr[:500]}")
+
+            stdout_lower = result.stdout.lower()
+            # 성공 또는 이미 최신 버전인 경우
+            is_success = result.returncode == 0
+            is_already_latest = "no applicable upgrade" in stdout_lower or "업그레이드를 찾을 수 없습니다" in result.stdout or "최신" in result.stdout
+            is_upgraded = "successfully" in stdout_lower
+
+            if is_success or is_already_latest or is_upgraded:
+                if is_already_latest:
+                    self.ngrok_install_status_label.config(text="✓ 이미 최신 버전", fg=self.success_color)
+                    messagebox.showinfo("알림", "ngrok이 이미 최신 버전입니다.")
+                    self.check_ngrok_installed()
+                else:
+                    self.ngrok_install_status_label.config(text="✓ 업그레이드 완료", fg=self.success_color)
+                    messagebox.showinfo("업그레이드 완료", "ngrok이 업그레이드되었습니다.\n\nClaude Portable을 재시작합니다.")
+                    self.restart_app()
+            else:
+                error_msg = result.stderr[:300] if result.stderr else result.stdout[:300]
+                self.ngrok_install_status_label.config(text="✗ 업그레이드 실패", fg=self.danger_color)
+                messagebox.showerror("업그레이드 실패", f"ngrok 업그레이드에 실패했습니다.\n\n{error_msg}")
+        except Exception as e:
+            print(f"[ngrok] 업그레이드 오류: {e}")
+            self.ngrok_install_status_label.config(text=f"오류: {e}", fg=self.danger_color)
+            messagebox.showerror("오류", f"업그레이드 중 오류 발생: {e}")
+
+    def check_ngrok_auth(self):
+        """ngrok 인증 상태 확인"""
+        try:
+            result = subprocess.run(
+                ["ngrok", "config", "check"],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=10
+            )
+            if result.returncode == 0:
+                self.ngrok_auth_status_label.config(text="✓ 인증됨", fg=self.success_color)
+            else:
+                # config check가 실패해도 authtoken이 있을 수 있음
+                if "authtoken" in result.stderr.lower() or "valid" in result.stdout.lower():
+                    self.ngrok_auth_status_label.config(text="✓ 인증됨", fg=self.success_color)
+                else:
+                    self.ngrok_auth_status_label.config(text="✗ 인증 필요", fg=self.warning_color)
+        except Exception:
+            self.ngrok_auth_status_label.config(text="확인 실패", fg=self.fg_secondary)
+
+    def install_ngrok(self):
+        """ngrok 설치 (winget 사용)"""
+        # winget 경로 확인
+        winget_path = self.get_winget_path()
+
+        if not winget_path:
+            self.ngrok_install_status_label.config(text="✗ winget 필요", fg=self.danger_color)
+            messagebox.showerror("설치 실패", "winget이 설치되어 있지 않습니다.\n먼저 winget을 설치해주세요.")
+            return
+
+        try:
+            self.ngrok_install_status_label.config(text="설치 중...", fg=self.warning_color)
+            self.root.update()
+
+            # winget으로 설치 시도
+            result = subprocess.run(
+                [winget_path, "install", "ngrok.ngrok", "--accept-source-agreements", "--accept-package-agreements"],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=120
+            )
+
+            if result.returncode == 0 or "successfully installed" in result.stdout.lower():
+                self.ngrok_install_status_label.config(text="✓ 설치 완료", fg=self.success_color)
+                messagebox.showinfo("설치 완료", "ngrok이 설치되었습니다.\n\nClaude Portable을 재시작합니다.")
+                self.restart_app()
+            else:
+                error_msg = result.stderr[:300] if result.stderr else result.stdout[:300]
+                self.ngrok_install_status_label.config(text="✗ 설치 실패", fg=self.danger_color)
+                messagebox.showerror("설치 실패", f"ngrok 설치에 실패했습니다.\n\n{error_msg}\n\nhttps://ngrok.com/download 에서 직접 설치하세요.")
+        except Exception as e:
+            self.ngrok_install_status_label.config(text=f"오류: {e}", fg=self.danger_color)
+            messagebox.showerror("오류", f"설치 중 오류 발생: {e}")
+
+    def register_ngrok_token(self):
+        """ngrok 토큰 등록"""
+        token = self.ngrok_token_var.get().strip()
+        if not token:
+            messagebox.showwarning("입력 필요", "Auth Token을 입력하세요.")
+            return
+
+        try:
+            result = subprocess.run(
+                ["ngrok", "config", "add-authtoken", token],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=30
+            )
+
+            if result.returncode == 0:
+                self.ngrok_auth_status_label.config(text="✓ 인증됨", fg=self.success_color)
+                self.ngrok_token_var.set("")  # 토큰 입력창 비우기
+                messagebox.showinfo("등록 완료", "ngrok 토큰이 등록되었습니다.")
+            else:
+                self.ngrok_auth_status_label.config(text="✗ 등록 실패", fg=self.danger_color)
+                messagebox.showerror("등록 실패", f"토큰 등록 실패:\n{result.stderr}")
+        except FileNotFoundError:
+            messagebox.showerror("오류", "ngrok이 설치되어 있지 않습니다.")
+        except Exception as e:
+            messagebox.showerror("오류", f"토큰 등록 중 오류: {e}")
+
+    def delete_ngrok_token(self):
+        """ngrok 토큰 삭제"""
+        if not messagebox.askyesno("확인", "ngrok 인증 토큰을 삭제하시겠습니까?"):
+            return
+
+        try:
+            # ngrok config 파일 경로 찾기
+            if os.name == 'nt':
+                config_path = os.path.join(os.environ.get('USERPROFILE', ''), '.ngrok2', 'ngrok.yml')
+                config_path_v3 = os.path.join(os.environ.get('LOCALAPPDATA', ''), 'ngrok', 'ngrok.yml')
+            else:
+                config_path = os.path.expanduser('~/.ngrok2/ngrok.yml')
+                config_path_v3 = os.path.expanduser('~/.config/ngrok/ngrok.yml')
+
+            deleted = False
+            for path in [config_path, config_path_v3]:
+                if os.path.exists(path):
+                    # config 파일에서 authtoken 라인 제거
+                    with open(path, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                    with open(path, 'w', encoding='utf-8') as f:
+                        for line in lines:
+                            if not line.strip().startswith('authtoken'):
+                                f.write(line)
+                    deleted = True
+
+            if deleted:
+                self.ngrok_auth_status_label.config(text="✗ 인증 필요", fg=self.warning_color)
+                messagebox.showinfo("삭제 완료", "ngrok 토큰이 삭제되었습니다.")
+            else:
+                messagebox.showinfo("알림", "삭제할 토큰이 없습니다.")
+        except Exception as e:
+            messagebox.showerror("오류", f"토큰 삭제 중 오류: {e}")
+
+    def fix_ngrok_config_version(self):
+        """ngrok 설정 파일 버전 검사 및 수정 (v3 → v2 변환)"""
+        # ngrok config 파일 경로
+        if os.name == 'nt':
+            config_paths = [
+                os.path.join(os.environ.get('LOCALAPPDATA', ''), 'ngrok', 'ngrok.yml'),
+                os.path.join(os.environ.get('USERPROFILE', ''), '.ngrok2', 'ngrok.yml'),
+            ]
+        else:
+            config_paths = [
+                os.path.expanduser('~/.config/ngrok/ngrok.yml'),
+                os.path.expanduser('~/.ngrok2/ngrok.yml'),
+            ]
+
+        for config_path in config_paths:
+            if os.path.exists(config_path):
+                try:
+                    with open(config_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+
+                    # version: "3" 또는 version: 3 체크
+                    import re
+                    if re.search(r'version:\s*["\']?3["\']?', content):
+                        print(f"[ngrok] 설정 파일 v3 형식 발견: {config_path}")
+                        print(f"[ngrok] v3 → v2 형식으로 자동 변환 중...")
+
+                        # authtoken 추출 (agent: 아래에 있음)
+                        authtoken_match = re.search(r'authtoken:\s*(\S+)', content)
+                        authtoken = authtoken_match.group(1) if authtoken_match else None
+
+                        if authtoken:
+                            # v2 형식으로 새로 작성
+                            new_content = f'version: "2"\nauthtoken: {authtoken}\n'
+
+                            with open(config_path, 'w', encoding='utf-8') as f:
+                                f.write(new_content)
+
+                            print(f"[ngrok] 설정 파일 변환 완료")
+                            print(f"[ngrok] 새 내용:\n{new_content}")
+                            return True
+                        else:
+                            print(f"[ngrok] authtoken을 찾을 수 없음")
+
+                except Exception as e:
+                    print(f"[ngrok] 설정 파일 수정 오류: {e}")
+
+        return False
+
+    def test_ngrok(self):
+        """ngrok 실행 테스트"""
+        try:
+            # 설정 파일 버전 검사 및 자동 수정
+            self.fix_ngrok_config_version()
+
+            port = self.port_var.get()
+            domain = self.ngrok_domain_var.get().strip()
+
+            print(f"[ngrok] 테스트 시작 - port: {port}, domain: {domain or '없음'}")
+
+            # 도메인 설정 저장
+            config["ngrok_domain"] = domain
+
+            self.ngrok_test_status_label.config(text="시작 중...", fg=self.warning_color)
+            self.ngrok_url_label.config(text="-")
+            self.ngrok_check_retry = 0  # 재시도 횟수 초기화
+            self.root.update()
+
+            # ngrok 실행 명령 구성
+            cmd = ["ngrok", "http", port]
+            if domain:
+                cmd = ["ngrok", "http", f"--domain={domain}", port]
+
+            print(f"[ngrok] 실행 명령: {' '.join(cmd)}")
+
+            # 백그라운드에서 ngrok 실행 (로그 출력 활성화)
+            self.ngrok_process = subprocess.Popen(
+                cmd + ["--log=stdout", "--log-level=info"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding='utf-8',
+                errors='replace'
+            )
+
+            print(f"[ngrok] 프로세스 시작됨 - PID: {self.ngrok_process.pid}")
+
+            # 별도 스레드에서 ngrok 출력 모니터링
+            import threading
+            def monitor_ngrok_output():
+                try:
+                    for line in self.ngrok_process.stdout:
+                        print(f"[ngrok:out] {line.rstrip()}")
+                except:
+                    pass
+            threading.Thread(target=monitor_ngrok_output, daemon=True).start()
+
+            # 잠시 대기 후 API로 URL 확인
+            self.root.after(3000, self.check_ngrok_url)
+
+        except FileNotFoundError as e:
+            print(f"[ngrok] 오류: ngrok을 찾을 수 없음 - {e}")
+            self.ngrok_test_status_label.config(text="✗ ngrok 없음", fg=self.danger_color)
+            messagebox.showerror("오류", "ngrok이 설치되어 있지 않습니다.")
+        except Exception as e:
+            print(f"[ngrok] 오류: {e}")
+            self.ngrok_test_status_label.config(text="오류", fg=self.danger_color)
+            messagebox.showerror("오류", f"ngrok 실행 중 오류: {e}")
+
+    def check_ngrok_url(self):
+        """ngrok URL 확인 (로컬 API 사용)"""
+        retry_count = getattr(self, 'ngrok_check_retry', 0) + 1
+        self.ngrok_check_retry = retry_count
+        print(f"[ngrok] URL 확인 시도 ({retry_count}/10)...")
+
+        # 프로세스 상태 확인
+        if hasattr(self, 'ngrok_process') and self.ngrok_process:
+            poll_result = self.ngrok_process.poll()
+            print(f"[ngrok] 프로세스 상태: {'실행 중' if poll_result is None else f'종료됨 (코드: {poll_result})'}")
+
+            if poll_result is not None:
+                # 프로세스가 종료된 경우 stderr 확인
+                try:
+                    stderr = self.ngrok_process.stderr.read().decode('utf-8', errors='replace')
+                    stdout = self.ngrok_process.stdout.read().decode('utf-8', errors='replace')
+                    if stderr:
+                        print(f"[ngrok] stderr: {stderr[:500]}")
+                    if stdout:
+                        print(f"[ngrok] stdout: {stdout[:500]}")
+                except:
+                    pass
+                self.ngrok_test_status_label.config(text="✗ 프로세스 종료됨", fg=self.danger_color)
+                return
+
+        try:
+            import urllib.request
+            import urllib.error
+            print(f"[ngrok] API 요청: http://127.0.0.1:4040/api/tunnels")
+            req = urllib.request.Request("http://127.0.0.1:4040/api/tunnels")
+            with urllib.request.urlopen(req, timeout=5) as response:
+                data = json.loads(response.read().decode())
+                tunnels = data.get("tunnels", [])
+                print(f"[ngrok] 응답 받음 - 터널 수: {len(tunnels)}")
+                if tunnels:
+                    public_url = tunnels[0].get("public_url", "")
+                    print(f"[ngrok] 성공! URL: {public_url}")
+                    self.ngrok_test_status_label.config(text="✓ 실행 중", fg=self.success_color)
+                    self.ngrok_url_label.config(text=public_url)
+                    # URL 클릭 시 브라우저 열기
+                    self.ngrok_url_label.bind("<Button-1>", lambda e: webbrowser.open(public_url))
+                else:
+                    print(f"[ngrok] 터널 없음")
+                    self.ngrok_test_status_label.config(text="터널 없음", fg=self.warning_color)
+        except (urllib.error.URLError, ConnectionRefusedError, OSError) as e:
+            print(f"[ngrok] 연결 실패: {type(e).__name__} - {e}")
+            # 아직 준비 안됨, 재시도 (최대 10회)
+            if retry_count < 10 and hasattr(self, 'ngrok_process') and self.ngrok_process.poll() is None:
+                self.ngrok_test_status_label.config(text=f"연결 대기 중... ({retry_count}/10)", fg=self.warning_color)
+                self.root.after(2000, self.check_ngrok_url)
+            else:
+                print(f"[ngrok] 최대 재시도 횟수 초과 또는 프로세스 종료")
+                self.ngrok_test_status_label.config(text="✗ 연결 실패", fg=self.danger_color)
+        except Exception as e:
+            print(f"[ngrok] 예외 발생: {type(e).__name__} - {e}")
+            self.ngrok_test_status_label.config(text="✗ 오류", fg=self.danger_color)
+
+    def stop_ngrok_test(self):
+        """ngrok 테스트 중지"""
+        try:
+            if hasattr(self, 'ngrok_process') and self.ngrok_process:
+                self.ngrok_process.terminate()
+                self.ngrok_process = None
+            # 혹시 다른 ngrok 프로세스도 종료
+            if os.name == 'nt':
+                subprocess.run(["taskkill", "/F", "/IM", "ngrok.exe"], capture_output=True)
+            else:
+                subprocess.run(["pkill", "ngrok"], capture_output=True)
+
+            self.ngrok_test_status_label.config(text="중지됨", fg=self.fg_secondary)
+            self.ngrok_url_label.config(text="-")
+        except Exception as e:
+            messagebox.showerror("오류", f"ngrok 중지 중 오류: {e}")
+
     def run(self):
         """GUI 실행"""
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.root.mainloop()
+
+    def restart_app(self):
+        """앱 재시작"""
+        import sys
+        # 서버 종료
+        if self.server_thread:
+            self.server_thread.stop()
+        # 현재 창 닫기
+        self.root.destroy()
+        # 새 프로세스로 재시작
+        subprocess.Popen([sys.executable] + sys.argv)
+        sys.exit(0)
 
     def on_closing(self):
         """창 닫기 처리"""
